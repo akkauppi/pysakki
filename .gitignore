@@ -1,1 +1,6 @@
-node_modules\n.env\ndist
+node_modules
+.env
+.env.local
+dist
+.codex
+*.tsbuildinfo
