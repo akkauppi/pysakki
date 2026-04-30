@@ -1,5 +1,5 @@
 {
-  "name": "reitti",
+  "name": "pysakki",
   "private": true,
   "version": "0.0.0",
   "description": "A small Helsinki public transport kiosk view for map, realtime vehicles, and stop departures.",

@@ -165,7 +165,7 @@ function getSharedClient() {
 
   if (!sharedClient) {
     sharedClient = mqtt.connect(MQTT_URL, {
-      clientId: `reitti-${Math.random().toString(36).slice(2, 10)}`,
+      clientId: `pysakki-${Math.random().toString(36).slice(2, 10)}`,
       protocolVersion: 4,
       reconnectPeriod: 2_000,
       connectTimeout: 10_000,
