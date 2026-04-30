@@ -31,23 +31,11 @@ const stopSourceId = "selected-stops";
 const vehicleSourceId = "vehicles";
 const VEHICLE_TRANSITION_MS = 900;
 const STOP_MARKER_COLORS = ["#34d399", "#38bdf8", "#f59e0b", "#f472b6"] as const;
-const STOP_CARD_CLASSES = [
-  "border-emerald-300/35 bg-emerald-400/8",
-  "border-sky-300/35 bg-sky-400/8",
-  "border-amber-300/35 bg-amber-400/8",
-  "border-pink-300/35 bg-pink-400/8",
-] as const;
-const STOP_BADGE_CLASSES = [
-  "bg-emerald-300 text-slate-950",
-  "bg-sky-300 text-slate-950",
-  "bg-amber-300 text-slate-950",
-  "bg-pink-300 text-slate-950",
-] as const;
-
-type LeaderLine = {
+type LeaderRibbon = {
   id: string;
   color: string;
-  path: string;
+  polygon: string;
+  spinePath: string;
   edgeX: number;
   edgeY: number;
   dotX: number;
@@ -64,8 +52,9 @@ export default function App() {
   const [styleLoading, setStyleLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [leaderLines, setLeaderLines] = useState<LeaderLine[]>([]);
+  const [leaderLines, setLeaderLines] = useState<LeaderRibbon[]>([]);
   const [overlaySize, setOverlaySize] = useState({ width: 1, height: 1 });
+  const [now, setNow] = useState(() => new Date());
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const mapShellRef = useRef<HTMLDivElement | null>(null);
@@ -87,6 +76,16 @@ export default function App() {
   useEffect(() => {
     vehiclesRef.current = vehicles;
   }, [vehicles]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(new Date());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,14 +111,6 @@ export default function App() {
           zoom: viewport.zoom,
           attributionControl: false,
         });
-
-        map.addControl(
-          new maplibregl.AttributionControl({
-            compact: true,
-            customAttribution: "Realtime data: HSL Digitransit",
-          }),
-          "bottom-right",
-        );
 
         map.on("load", () => {
           const emptyPoints: FeatureCollection<Point> = {
@@ -162,30 +153,11 @@ export default function App() {
           });
 
           map.addLayer({
-            id: "stop-order-labels",
-            type: "symbol",
-            source: stopSourceId,
-            layout: {
-              "text-field": ["to-string", ["get", "order"]],
-              "text-font": ["Open Sans Bold"],
-              "text-size": 11,
-            },
-            paint: {
-              "text-color": "#020617",
-            },
-          });
-
-          map.addLayer({
             id: "stop-labels",
             type: "symbol",
             source: stopSourceId,
             layout: {
-              "text-field": [
-                "concat",
-                ["to-string", ["get", "order"]],
-                " ",
-                ["coalesce", ["get", "code"], ["get", "name"]],
-              ],
+              "text-field": ["coalesce", ["get", "code"], ["get", "name"]],
               "text-font": ["Open Sans Semibold"],
               "text-offset": [0, 1.25],
               "text-size": 12,
@@ -422,7 +394,7 @@ export default function App() {
           height: Math.max(1, Math.ceil(rootRect.height)),
         });
 
-        const nextLines: LeaderLine[] = stops.flatMap((stop, index) => {
+        const nextLines: LeaderRibbon[] = stops.flatMap((stop, index) => {
           const card = stopCardRefs.current.get(stop.gtfsId);
           if (!card) {
             return [];
@@ -441,7 +413,7 @@ export default function App() {
           const mapIsToRight = mapLeft >= cardRight - 12;
           const mapIsBelow = mapTop >= cardBottom - 12;
 
-          let path = "";
+          let spinePoints: Array<{ x: number; y: number }> = [];
           let edgeX = 0;
           let edgeY = 0;
           let x2 = 0;
@@ -455,7 +427,12 @@ export default function App() {
             x2 = edgeX;
             y2 = clamp(mapTop + projected.y, mapTop + 28, mapTop + mapHeight - 20);
             const bendY = y1 + Math.max(28, (edgeY - y1) * 0.45);
-            path = `M ${x1} ${y1} L ${x1} ${bendY} L ${edgeX} ${edgeY} L ${x2} ${y2}`;
+            spinePoints = [
+              { x: x1, y: y1 },
+              { x: x1, y: bendY },
+              { x: edgeX, y: edgeY },
+              { x: x2, y: y2 },
+            ];
           } else if (mapIsToRight) {
             const x1 = cardRight - 2;
             const y1 = cardTop + cardRect.height * 0.5;
@@ -464,7 +441,11 @@ export default function App() {
             const bendX = x1 + 32;
             edgeX = mapLeft + 8;
             edgeY = interpolateLineYAtX(bendX, y1, x2, y2, edgeX);
-            path = `M ${x1} ${y1} L ${bendX} ${y1} L ${x2} ${y2}`;
+            spinePoints = [
+              { x: x1, y: y1 },
+              { x: bendX, y: y1 },
+              { x: x2, y: y2 },
+            ];
           } else {
             const x1 = cardRight - 2;
             const y1 = cardTop + cardRect.height * 0.5;
@@ -473,14 +454,26 @@ export default function App() {
             const bendX = x1 + 32;
             edgeX = mapLeft + 8;
             edgeY = interpolateLineYAtX(bendX, y1, x2, y2, edgeX);
-            path = `M ${x1} ${y1} L ${bendX} ${y1} L ${x2} ${y2}`;
+            spinePoints = [
+              { x: x1, y: y1 },
+              { x: bendX, y: y1 },
+              { x: x2, y: y2 },
+            ];
           }
+
+          const polygon = buildRibbonPolygon(
+            spinePoints,
+            mapIsBelow ? 114 : 102,
+            mapIsBelow ? 36 : 30,
+          );
+          const spinePath = toSvgPath(spinePoints);
 
           return [
             {
               id: stop.gtfsId,
               color: STOP_MARKER_COLORS[index] ?? "#ffffff",
-              path,
+              polygon,
+              spinePath,
               edgeX,
               edgeY,
               dotX: x2,
@@ -539,19 +532,15 @@ export default function App() {
           <div className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent md:block" />
           <div className="flex h-full min-h-0 flex-col p-4 sm:p-5">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.28em] text-emerald-200">
-                  <MapPinned className="h-3.5 w-3.5" />
-                  Reitti
-                </div>
-                <h1 className="mt-2 text-[clamp(1.35rem,2vw,2rem)] font-semibold tracking-tight text-white">
-                  Departures and map in one screen
-                </h1>
+              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.28em] text-emerald-200">
+                <MapPinned className="h-3.5 w-3.5" />
+                <span className="h-2 w-2 rounded-full bg-emerald-300" />
               </div>
 
-              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-slate-300">
-                <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                {formatVehicleStreamStatus(vehicleStreamStatus)}
+              <div className="text-right">
+                <div className="text-[clamp(2rem,5vw,4rem)] font-semibold leading-none tracking-tight text-white tabular-nums">
+                  {formatClockTime(now)}
+                </div>
               </div>
             </div>
 
@@ -597,20 +586,11 @@ export default function App() {
                       }
                     }}
                     className={cn(
-                      "relative min-h-0 overflow-hidden rounded-[1.65rem] border p-4",
-                      STOP_CARD_CLASSES[index] ?? "border-white/10 bg-white/5",
+                      "relative min-h-0 overflow-hidden rounded-[1.65rem] border p-4 backdrop-blur-md",
                     )}
+                    style={getStopCardStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                   >
                     <div className="mb-3 flex items-start gap-3">
-                      <div
-                        className={cn(
-                          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold shadow-lg",
-                          STOP_BADGE_CLASSES[index] ?? "bg-white text-slate-950",
-                        )}
-                      >
-                        {index + 1}
-                      </div>
-
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -621,9 +601,6 @@ export default function App() {
                               {stop.name}
                             </div>
                           </div>
-                          <span className="rounded-full bg-black/20 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-slate-100">
-                            {stop.departures.length}
-                          </span>
                         </div>
                         {stop.desc ? (
                           <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-300">
@@ -637,23 +614,27 @@ export default function App() {
                       {stop.departures.map((departure) => (
                         <div
                           key={`${stop.gtfsId}-${departure.serviceDay}-${departure.realtimeDeparture}-${departure.headsign}`}
-                          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5"
+                          className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-white/8 px-3 py-3"
+                          style={getStopRowStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                         >
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-black/20">
+                            <ModeIcon mode={departure.routeMode} className="h-7 w-7" />
+                          </div>
+
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <ModeIcon mode={departure.routeMode} />
-                              <span className="text-sm font-semibold text-white">
+                            <div className="flex items-end gap-2">
+                              <span className="text-[clamp(1.35rem,2vw,2rem)] font-semibold leading-none text-white">
                                 {departure.routeShortName ?? departure.routeMode}
                               </span>
+                              <span className="truncate pb-0.5 text-sm text-slate-200">{departure.headsign}</span>
                             </div>
-                            <div className="mt-1 truncate text-sm text-slate-200">{departure.headsign}</div>
+                            <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-300">
+                              {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
+                            </div>
                           </div>
 
                           <div className="text-right">
-                            <div className="text-sm font-semibold text-white">
-                              {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
-                            </div>
-                            <div className="text-xs text-slate-300">
+                            <div className="text-[clamp(1.45rem,2.4vw,2.35rem)] font-semibold leading-none text-white tabular-nums">
                               {formatRelativeMinutes(departure.serviceDay, departure.realtimeDeparture)}
                             </div>
                           </div>
@@ -673,9 +654,11 @@ export default function App() {
         >
           <div ref={mapContainerRef} className="absolute inset-0" />
 
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-3">
-            <div className="rounded-full border border-white/10 bg-slate-950/55 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-slate-200 backdrop-blur-md">
-              {stops.length > 0 ? `${stops.length} stop view` : "Preparing stop view"}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-3">
+            <div className="pointer-events-auto max-w-[min(92%,38rem)] rounded-2xl border border-white/10 bg-slate-950/68 px-3 py-2 text-center text-[10px] leading-4 text-slate-300 backdrop-blur-md">
+              Realtime data: HSL Digitransit | Digitransit data is licensed under CC BY 4.0. |
+              {" "}
+              © OpenMapTiles © OpenStreetMap contributors
             </div>
           </div>
 
@@ -698,17 +681,25 @@ export default function App() {
       >
         {leaderLines.map((line) => (
           <g key={line.id}>
+            <polygon
+              points={line.polygon}
+              fill={line.color}
+              stroke={withAlpha(line.color, 0.38)}
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+              opacity="0.26"
+            />
             <path
-              d={line.path}
+              d={line.spinePath}
               fill="none"
               stroke={line.color}
-              strokeWidth="5"
+              strokeWidth="1.5"
               strokeLinecap="round"
               strokeLinejoin="round"
-              opacity="0.9"
+              opacity="0.4"
             />
-            <circle cx={line.edgeX} cy={line.edgeY} r="3.5" fill={line.color} opacity="0.95" />
-            <circle cx={line.dotX} cy={line.dotY} r="4" fill={line.color} opacity="0.95" />
+            <circle cx={line.edgeX} cy={line.edgeY} r="3.5" fill={line.color} opacity="0.8" />
+            <circle cx={line.dotX} cy={line.dotY} r="4" fill={line.color} opacity="0.9" />
           </g>
         ))}
       </svg>
@@ -798,16 +789,16 @@ function Notice({
   return <div className={cn("flex gap-3 rounded-3xl border p-4 text-sm leading-6", className)}>{children}</div>;
 }
 
-function ModeIcon({ mode }: { mode: string }) {
+function ModeIcon({ mode, className }: { mode: string; className?: string }) {
   if (mode === "TRAM") {
-    return <TramFront className="h-4 w-4 text-blue-300" />;
+    return <TramFront className={cn("h-4 w-4 text-blue-300", className)} />;
   }
 
   if (mode === "RAIL" || mode === "SUBWAY") {
-    return <TrainFront className="h-4 w-4 text-violet-300" />;
+    return <TrainFront className={cn("h-4 w-4 text-violet-300", className)} />;
   }
 
-  return <Bus className="h-4 w-4 text-emerald-300" />;
+  return <Bus className={cn("h-4 w-4 text-emerald-300", className)} />;
 }
 
 function toVehicleCollection(
@@ -882,6 +873,13 @@ function formatVehicleStreamStatus(status: VehicleStreamStatus) {
   }
 }
 
+function formatClockTime(value: Date) {
+  return new Intl.DateTimeFormat("fi-FI", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
+}
+
 function getDepartureLimit(stopCount: number) {
   if (stopCount >= 4) {
     return 3;
@@ -925,6 +923,21 @@ function getStopBoardLayout(stopCount: number, isStackedLayout: boolean) {
   };
 }
 
+function getStopCardStyle(color: string) {
+  return {
+    borderColor: withAlpha(color, 0.34),
+    background: `linear-gradient(145deg, ${withAlpha(color, 0.2)}, ${withAlpha(color, 0.08)} 46%, rgba(2, 6, 23, 0.52))`,
+    boxShadow: `inset 0 1px 0 ${withAlpha(color, 0.22)}, 0 18px 48px rgba(2, 6, 23, 0.24)`,
+  };
+}
+
+function getStopRowStyle(color: string) {
+  return {
+    borderColor: withAlpha(color, 0.2),
+    background: `linear-gradient(135deg, ${withAlpha(color, 0.14)}, rgba(2, 6, 23, 0.3) 62%)`,
+  };
+}
+
 function interpolateLineYAtX(x1: number, y1: number, x2: number, y2: number, targetX: number) {
   if (Math.abs(x2 - x1) < 0.001) {
     return y2;
@@ -932,4 +945,77 @@ function interpolateLineYAtX(x1: number, y1: number, x2: number, y2: number, tar
 
   const progress = clamp((targetX - x1) / (x2 - x1), 0, 1);
   return lerp(y1, y2, progress);
+}
+
+function buildRibbonPolygon(
+  points: Array<{ x: number; y: number }>,
+  startWidth: number,
+  endWidth: number,
+) {
+  if (points.length < 2) {
+    return "";
+  }
+
+  const left: Array<{ x: number; y: number }> = [];
+  const right: Array<{ x: number; y: number }> = [];
+
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    const prev = points[Math.max(0, index - 1)];
+    const next = points[Math.min(points.length - 1, index + 1)];
+    const tangent = normalize({
+      x: next.x - prev.x,
+      y: next.y - prev.y,
+    });
+    const normal = {
+      x: -tangent.y,
+      y: tangent.x,
+    };
+    const progress = points.length === 1 ? 1 : index / (points.length - 1);
+    const width = lerp(startWidth, endWidth, progress);
+
+    left.push({
+      x: point.x + normal.x * (width / 2),
+      y: point.y + normal.y * (width / 2),
+    });
+    right.push({
+      x: point.x - normal.x * (width / 2),
+      y: point.y - normal.y * (width / 2),
+    });
+  }
+
+  return [...left, ...right.reverse()].map((point) => `${point.x},${point.y}`).join(" ");
+}
+
+function toSvgPath(points: Array<{ x: number; y: number }>) {
+  if (points.length === 0) {
+    return "";
+  }
+
+  const [first, ...rest] = points;
+  return `M ${first.x} ${first.y}${rest.map((point) => ` L ${point.x} ${point.y}`).join("")}`;
+}
+
+function normalize(vector: { x: number; y: number }) {
+  const length = Math.hypot(vector.x, vector.y);
+  if (length < 0.001) {
+    return { x: 0, y: 1 };
+  }
+
+  return {
+    x: vector.x / length,
+    y: vector.y / length,
+  };
+}
+
+function withAlpha(hex: string, alpha: number) {
+  const normalized = hex.replace("#", "");
+  if (normalized.length !== 6) {
+    return hex;
+  }
+
+  const r = Number.parseInt(normalized.slice(0, 2), 16);
+  const g = Number.parseInt(normalized.slice(2, 4), 16);
+  const b = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
