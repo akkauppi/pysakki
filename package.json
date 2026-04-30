@@ -2,6 +2,16 @@
   "name": "reitti",
   "private": true,
   "version": "0.0.0",
+  "description": "A small Helsinki public transport kiosk view for map, realtime vehicles, and stop departures.",
+  "license": "MIT",
+  "keywords": [
+    "helsinki",
+    "hsl",
+    "digitransit",
+    "kiosk",
+    "maplibre",
+    "realtime-transit"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
