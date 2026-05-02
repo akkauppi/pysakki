@@ -4,7 +4,20 @@ const styleUrl =
   import.meta.env.VITE_HSL_STYLE_URL ??
   "https://cdn.jsdelivr.net/gh/HSLdevcom/hsl-map-style@master/style.json";
 
-export async function loadHslStyle(): Promise<StyleSpecification | string> {
+let stylePromise: Promise<StyleSpecification> | null = null;
+
+export async function loadHslStyle(): Promise<StyleSpecification> {
+  if (!stylePromise) {
+    stylePromise = fetchHslStyle().catch((error: unknown) => {
+      stylePromise = null;
+      throw error;
+    });
+  }
+
+  return cloneStyle(await stylePromise);
+}
+
+async function fetchHslStyle(): Promise<StyleSpecification> {
   const response = await fetch(styleUrl);
   if (!response.ok) {
     throw new Error(`Style request failed with ${response.status}.`);
@@ -74,4 +87,8 @@ function rewriteStyle(style: StyleSpecification, resolvedStyleUrl: string): Styl
     glyphs: typeof style.glyphs === "string" ? resolveAssetUrl(style.glyphs) : style.glyphs,
     sources: rewrittenSources,
   };
+}
+
+function cloneStyle(style: StyleSpecification): StyleSpecification {
+  return JSON.parse(JSON.stringify(style)) as StyleSpecification;
 }

@@ -62,6 +62,8 @@ export default function App() {
   const mapRef = useRef<MapLibreMap | null>(null);
   const vehicleSourceRef = useRef<GeoJSONSource | null>(null);
   const stopSourceRef = useRef<GeoJSONSource | null>(null);
+  const initialViewportRef = useRef(initialUrlState.viewport);
+  const stopIdsRef = useRef(initialUrlState.stopIds);
   const vehicleFrameRef = useRef<number | null>(null);
   const leaderLineFrameRef = useRef<number | null>(null);
   const vehiclesRef = useRef<Map<string, VehicleSnapshot>>(new Map());
@@ -107,12 +109,20 @@ export default function App() {
         const map = new maplibregl.Map({
           container: mapContainerRef.current,
           style,
-          center: [viewport.lon, viewport.lat],
-          zoom: viewport.zoom,
+          center: [initialViewportRef.current.lon, initialViewportRef.current.lat],
+          zoom: initialViewportRef.current.zoom,
           attributionControl: false,
         });
 
-        map.on("load", () => {
+        let mapSetupComplete = false;
+
+        const installMapOverlays = () => {
+          if (mapSetupComplete || cancelled) {
+            return;
+          }
+
+          mapSetupComplete = true;
+
           const emptyPoints: FeatureCollection<Point> = {
             type: "FeatureCollection",
             features: [],
@@ -224,7 +234,10 @@ export default function App() {
           vehicleSourceRef.current = map.getSource(vehicleSourceId) as GeoJSONSource;
           stopSourceRef.current = map.getSource(stopSourceId) as GeoJSONSource;
           setMapReady(true);
-        });
+        };
+
+        map.once("style.load", installMapOverlays);
+        map.once("load", installMapOverlays);
 
         map.on("moveend", () => {
           const center = map.getCenter();
@@ -234,11 +247,17 @@ export default function App() {
             zoom: round(map.getZoom(), 2),
           };
 
-          setViewport(nextViewport);
+          setViewport((current) =>
+            current.lat === nextViewport.lat &&
+            current.lon === nextViewport.lon &&
+            current.zoom === nextViewport.zoom
+              ? current
+              : nextViewport,
+          );
 
           const nextUrl = serializeUrlState({
             viewport: nextViewport,
-            stopIds: initialUrlState.stopIds,
+            stopIds: stopIdsRef.current,
           });
 
           window.history.replaceState({}, "", nextUrl);
@@ -270,7 +289,7 @@ export default function App() {
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [initialUrlState.stopIds, viewport.lat, viewport.lon, viewport.zoom]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
