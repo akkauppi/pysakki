@@ -50,6 +50,26 @@ cp .env.example .env.local
 npm run dev
 ```
 
+## Testing
+
+Run the production build check:
+
+```bash
+npm run build
+```
+
+Run the Playwright layout smoke tests:
+
+```bash
+npm run test:e2e
+```
+
+If Playwright browsers are missing locally, install Chromium once:
+
+```bash
+npx playwright install chromium
+```
+
 ## URL Parameters
 
 - `lat`: map center latitude
@@ -69,5 +89,7 @@ Example:
 
 - The app fetches the HSL map style from the public `hsl-map-style` repository and rewrites Digitransit tile URLs with the configured API key.
 - Realtime vehicle positions are consumed directly in the browser from `wss://mqtt.hsl.fi:443/`.
+- The schedule cards are intentionally capacity-aware: dense 3-4 stop layouts on small or unusual screens show fewer departures rather than clipping content.
+- Leader-line behavior is covered by Playwright smoke tests across small portrait, small landscape, and desktop-ish viewport sizes.
 - If Digitransit tightens key or CORS requirements, the style and GraphQL requests may need updated credentials or endpoint configuration.
 - Attribution and data licenses from HSL Digitransit, OpenMapTiles, and OpenStreetMap must be kept visible in the UI.

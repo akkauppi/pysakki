@@ -4,3 +4,5 @@ node_modules
 dist
 .codex
 *.tsbuildinfo
+test-results
+playwright-report

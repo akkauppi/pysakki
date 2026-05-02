@@ -75,6 +75,9 @@ export default function App() {
   const departureLimit = getDepartureLimit(initialUrlState.stopIds.length);
   const isStackedLayout = overlaySize.width < 768;
   const stopBoardLayout = getStopBoardLayout(stops.length, isStackedLayout);
+  const visibleDepartureCount = getVisibleDepartureCount(stops.length, isStackedLayout, overlaySize);
+  const compactSchedule = visibleDepartureCount <= 2;
+  const ultraCompactSchedule = visibleDepartureCount <= 1 && stops.length >= 3;
 
   useEffect(() => {
     vehiclesRef.current = vehicles;
@@ -415,7 +418,8 @@ export default function App() {
         });
 
         const nextLines: LeaderRibbon[] = stops.flatMap((stop, index) => {
-          const card = stopCardRefs.current.get(stop.gtfsId);
+          const leaderId = getLeaderId(stop, index);
+          const card = stopCardRefs.current.get(leaderId);
           if (!card) {
             return [];
           }
@@ -432,6 +436,8 @@ export default function App() {
           const cardBottom = cardRect.bottom - rootRect.top;
           const mapIsToRight = mapLeft >= cardRight - 12;
           const mapIsBelow = mapTop >= cardBottom - 12;
+          const routeToMapBottom = mapIsBelow && index >= 2;
+          const ribbonWidths = getLeaderRibbonWidths(stops.length, mapIsBelow, rootRect.width);
 
           let spinePoints: Array<{ x: number; y: number }> = [];
           let edgeX = 0;
@@ -439,7 +445,25 @@ export default function App() {
           let x2 = 0;
           let y2 = 0;
 
-          if (mapIsBelow) {
+          if (routeToMapBottom) {
+            const cardCenterX = cardLeft + cardRect.width * 0.5;
+            const x1 = clamp(cardCenterX, cardLeft + 16, cardRight - 16);
+            const y1 = cardBottom - 2;
+            const routeOnLeft = cardCenterX < mapLeft + mapWidth * 0.5;
+            const sideX = routeOnLeft ? mapLeft + 18 : mapLeft + mapWidth - 18;
+            const topY = Math.max(y1 + 18, mapTop - 18);
+            edgeX = sideX;
+            edgeY = mapTop + mapHeight - 10;
+            x2 = clamp(mapLeft + projected.x, mapLeft + 28, mapLeft + mapWidth - 28);
+            y2 = clamp(mapTop + projected.y, mapTop + 28, mapTop + mapHeight - 32);
+            spinePoints = [
+              { x: x1, y: y1 },
+              { x: x1, y: topY },
+              { x: sideX, y: topY },
+              { x: edgeX, y: edgeY },
+              { x: x2, y: y2 },
+            ];
+          } else if (mapIsBelow) {
             const x1 = clamp(cardLeft + cardRect.width * 0.5, cardLeft + 16, cardRight - 16);
             const y1 = cardBottom - 2;
             edgeX = clamp(mapLeft + projected.x, mapLeft + 16, mapLeft + mapWidth - 16);
@@ -483,14 +507,14 @@ export default function App() {
 
           const polygon = buildRibbonPolygon(
             spinePoints,
-            mapIsBelow ? 114 : 102,
-            mapIsBelow ? 36 : 30,
+            ribbonWidths.start,
+            ribbonWidths.end,
           );
           const spinePath = toSvgPath(spinePoints);
 
           return [
             {
-              id: stop.gtfsId,
+              id: leaderId,
               color: STOP_MARKER_COLORS[index] ?? "#ffffff",
               polygon,
               spinePath,
@@ -597,32 +621,35 @@ export default function App() {
               >
                 {stops.map((stop, index) => (
                   <section
-                    key={stop.gtfsId}
+                    key={getLeaderId(stop, index)}
+                    data-testid="stop-card"
                     ref={(element) => {
+                      const leaderId = getLeaderId(stop, index);
                       if (element) {
-                        stopCardRefs.current.set(stop.gtfsId, element);
+                        stopCardRefs.current.set(leaderId, element);
                       } else {
-                        stopCardRefs.current.delete(stop.gtfsId);
+                        stopCardRefs.current.delete(leaderId);
                       }
                     }}
                     className={cn(
-                      "relative min-h-0 overflow-hidden rounded-[1.65rem] border p-4 backdrop-blur-md",
+                      "relative min-h-0 overflow-hidden rounded-[1.65rem] border backdrop-blur-md",
+                      ultraCompactSchedule ? "p-1.5 sm:p-2" : compactSchedule ? "p-2.5 sm:p-3" : "p-4",
                     )}
                     style={getStopCardStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                   >
-                    <div className="mb-3 flex items-start gap-3">
+                    <div className={cn("flex items-start gap-3", ultraCompactSchedule ? "mb-1" : compactSchedule ? "mb-2" : "mb-3")}>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className="text-[10px] uppercase tracking-[0.22em] text-slate-300">
+                            <div className={cn("uppercase text-slate-300", ultraCompactSchedule ? "text-[8px] tracking-[0.1em]" : compactSchedule ? "text-[9px] tracking-[0.16em]" : "text-[10px] tracking-[0.22em]")}>
                               {stop.code} {stop.vehicleMode ? `· ${stop.vehicleMode}` : ""}
                             </div>
-                            <div className="mt-1 truncate text-[clamp(1rem,1.35vw,1.35rem)] font-semibold text-white">
+                            <div className={cn("truncate font-semibold text-white", ultraCompactSchedule ? "mt-0.5 text-[clamp(0.72rem,2.8vw,0.9rem)] leading-none" : compactSchedule ? "mt-1 text-[clamp(0.86rem,2.6vw,1.05rem)] leading-tight" : "mt-1 text-[clamp(1rem,1.35vw,1.35rem)]")}>
                               {stop.name}
                             </div>
                           </div>
                         </div>
-                        {stop.desc ? (
+                        {stop.desc && !compactSchedule ? (
                           <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-300">
                             {stop.desc}
                           </div>
@@ -630,31 +657,37 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid gap-2">
-                      {stop.departures.map((departure) => (
+                    <div className={cn("grid", ultraCompactSchedule ? "gap-1" : compactSchedule ? "gap-1.5" : "gap-2")}>
+                      {stop.departures.slice(0, visibleDepartureCount).map((departure) => (
                         <div
                           key={`${stop.gtfsId}-${departure.serviceDay}-${departure.realtimeDeparture}-${departure.headsign}`}
-                          className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-white/8 px-3 py-3"
+                          data-testid="departure-row"
+                          className={cn(
+                            "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center rounded-2xl border border-white/8",
+                            ultraCompactSchedule && "grid-cols-[minmax(0,1fr)_auto] gap-1.5 rounded-xl px-1.5 py-1",
+                            compactSchedule && !ultraCompactSchedule ? "gap-2 px-2 py-2" : null,
+                            !compactSchedule ? "gap-3 px-3 py-3" : null,
+                          )}
                           style={getStopRowStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                         >
-                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-black/20">
-                            <ModeIcon mode={departure.routeMode} className="h-7 w-7" />
+                          <div className={cn("items-center justify-center rounded-2xl bg-black/20", ultraCompactSchedule ? "hidden" : compactSchedule ? "flex h-8 w-8" : "flex h-12 w-12")}>
+                            <ModeIcon mode={departure.routeMode} className={compactSchedule ? "h-5 w-5" : "h-7 w-7"} />
                           </div>
 
                           <div className="min-w-0">
                             <div className="flex items-end gap-2">
-                              <span className="text-[clamp(1.35rem,2vw,2rem)] font-semibold leading-none text-white">
+                              <span className={cn("font-semibold leading-none text-white", ultraCompactSchedule ? "text-[clamp(0.88rem,3.4vw,1.05rem)]" : compactSchedule ? "text-[clamp(1rem,3.8vw,1.35rem)]" : "text-[clamp(1.35rem,2vw,2rem)]")}>
                                 {departure.routeShortName ?? departure.routeMode}
                               </span>
-                              <span className="truncate pb-0.5 text-sm text-slate-200">{departure.headsign}</span>
+                              <span className={cn("truncate pb-0.5 text-slate-200", ultraCompactSchedule ? "text-[10px]" : compactSchedule ? "text-xs" : "text-sm")}>{departure.headsign}</span>
                             </div>
-                            <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-300">
+                            <div className={cn("mt-1 uppercase text-slate-300", ultraCompactSchedule ? "hidden" : compactSchedule ? "text-[10px] tracking-[0.12em]" : "text-xs tracking-[0.18em]")}>
                               {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
                             </div>
                           </div>
 
                           <div className="text-right">
-                            <div className="text-[clamp(1.45rem,2.4vw,2.35rem)] font-semibold leading-none text-white tabular-nums">
+                            <div className={cn("font-semibold leading-none text-white tabular-nums", ultraCompactSchedule ? "text-[clamp(0.9rem,3.8vw,1.08rem)]" : compactSchedule ? "text-[clamp(1.05rem,4vw,1.45rem)]" : "text-[clamp(1.45rem,2.4vw,2.35rem)]")}>
                               {formatRelativeMinutes(departure.serviceDay, departure.realtimeDeparture)}
                             </div>
                           </div>
@@ -916,6 +949,36 @@ function getDepartureLimit(stopCount: number) {
   return 6;
 }
 
+function getVisibleDepartureCount(
+  stopCount: number,
+  isStackedLayout: boolean,
+  screenSize: { width: number; height: number },
+) {
+  const height = screenSize.height;
+
+  if (stopCount >= 4) {
+    return height < 560 ? 0 : height >= 900 && !isStackedLayout ? 2 : 1;
+  }
+
+  if (stopCount === 3) {
+    if (height < 560) {
+      return 0;
+    }
+
+    if (isStackedLayout || height < 760) {
+      return 1;
+    }
+
+    return height >= 900 && !isStackedLayout ? 3 : 2;
+  }
+
+  if (stopCount === 2) {
+    return height < 620 ? 2 : 4;
+  }
+
+  return height < 520 ? 3 : 6;
+}
+
 function getStopBoardLayout(stopCount: number, isStackedLayout: boolean) {
   if (!isStackedLayout) {
     return {
@@ -940,6 +1003,22 @@ function getStopBoardLayout(stopCount: number, isStackedLayout: boolean) {
   return {
     gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     gridTemplateRows: "repeat(2, minmax(0, 1fr))",
+  };
+}
+
+function getLeaderId(stop: StopWithDepartures, index: number) {
+  return `${stop.gtfsId}-${index}`;
+}
+
+function getLeaderRibbonWidths(stopCount: number, isStackedLayout: boolean, screenWidth: number) {
+  const densityScale = stopCount >= 3 ? 0.72 : 1;
+  const screenScale = screenWidth < 520 ? 0.56 : screenWidth < 768 ? 0.68 : 1;
+  const layoutScale = isStackedLayout ? 0.82 : 1;
+  const scale = densityScale * screenScale * layoutScale;
+
+  return {
+    start: Math.max(34, Math.round(102 * scale)),
+    end: Math.max(16, Math.round(30 * scale)),
   };
 }
 
