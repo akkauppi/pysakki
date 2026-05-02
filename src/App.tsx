@@ -31,6 +31,7 @@ const stopSourceId = "selected-stops";
 const vehicleSourceId = "vehicles";
 const VEHICLE_TRANSITION_MS = 900;
 const STOP_MARKER_COLORS = ["#34d399", "#38bdf8", "#f59e0b", "#f472b6"] as const;
+const HSL_LABEL_FONT = ["Gotham Rounded Medium"];
 type LeaderRibbon = {
   id: string;
   color: string;
@@ -168,7 +169,7 @@ export default function App() {
             source: stopSourceId,
             layout: {
               "text-field": ["coalesce", ["get", "code"], ["get", "name"]],
-              "text-font": ["Open Sans Semibold"],
+              "text-font": HSL_LABEL_FONT,
               "text-offset": [0, 1.25],
               "text-size": 12,
               "text-anchor": "top",
@@ -219,7 +220,7 @@ export default function App() {
             minzoom: 11,
             layout: {
               "text-field": ["coalesce", ["get", "label"], ""],
-              "text-font": ["Open Sans Bold"],
+              "text-font": HSL_LABEL_FONT,
               "text-size": 11,
               "text-offset": [0, 1.2],
               "text-anchor": "top",

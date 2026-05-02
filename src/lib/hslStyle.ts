@@ -3,6 +3,7 @@ import type { StyleSpecification } from "maplibre-gl";
 const styleUrl =
   import.meta.env.VITE_HSL_STYLE_URL ??
   "https://cdn.jsdelivr.net/gh/HSLdevcom/hsl-map-style@master/style.json";
+const digitransitAssetHosts = ["https://api.digitransit.fi/", "https://cdn.digitransit.fi/"] as const;
 
 let stylePromise: Promise<StyleSpecification> | null = null;
 
@@ -32,7 +33,7 @@ function rewriteStyle(style: StyleSpecification, resolvedStyleUrl: string): Styl
   const styleBaseUrl = resolvedStyleUrl.slice(0, resolvedStyleUrl.lastIndexOf("/") + 1);
 
   const addQuery = (url: string) => {
-    if (!key || !url.startsWith("https://")) {
+    if (!key || !digitransitAssetHosts.some((host) => url.startsWith(host))) {
       return url;
     }
 
