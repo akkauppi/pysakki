@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Feature, FeatureCollection, Point } from "geojson";
 import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
 import {
@@ -34,16 +34,27 @@ const vehicleSourceId = "vehicles";
 const VEHICLE_TRANSITION_MS = 900;
 const STOP_MARKER_COLORS = ["#34d399", "#38bdf8", "#f59e0b", "#f472b6"] as const;
 const HSL_LABEL_FONT = ["Gotham Rounded Medium"];
+const DEPARTURE_EXPIRY_GRACE_MS = 45_000;
+const STOP_REFRESH_INTERVAL_MS = 60_000;
+const STOP_REFRESH_MIN_INTERVAL_MS = 15_000;
 type LeaderRibbon = {
   id: string;
+  svgId: string;
   color: string;
   polygon: string;
-  spinePath: string;
-  edgeX: number;
-  edgeY: number;
-  dotX: number;
-  dotY: number;
+  stopX: number;
+  stopY: number;
+  cardX: number;
+  cardY: number;
+  stopRadius: number;
 };
+
+type ScreenPoint = {
+  x: number;
+  y: number;
+};
+
+type Departure = StopWithDepartures["departures"][number];
 
 export default function App() {
   const initialUrlState = useMemo(() => parseUrlState(window.location.search), []);
@@ -74,6 +85,7 @@ export default function App() {
   const leaderLineFrameRef = useRef<number | null>(null);
   const vehiclesRef = useRef<Map<string, VehicleSnapshot>>(new Map());
   const stopCardRefs = useRef(new Map<string, HTMLElement>());
+  const lastStopRefreshAtRef = useRef(0);
 
   const vehicleMqttTopics = useMemo(
     () => getVehicleMqttTopics(vehicleBounds),
@@ -82,11 +94,17 @@ export default function App() {
   const { vehicles, status: vehicleStreamStatus } = useVehicleStream(vehicleMqttTopics);
   const digitransitApiKeyConfigured = Boolean(import.meta.env.VITE_DIGITRANSIT_API_KEY);
   const departureLimit = getDepartureLimit(initialUrlState.stopIds.length);
+  const activeStops = useMemo(() => filterStopsWithActiveDepartures(stops, now), [stops, now]);
   const isStackedLayout = overlaySize.width < 768;
   const stopBoardLayout = getStopBoardLayout(stops.length, isStackedLayout);
-  const visibleDepartureCount = getVisibleDepartureCount(stops.length, isStackedLayout, overlaySize);
+  const maxActiveDepartureCount = getMaxDepartureCount(activeStops);
+  const scheduleFit = getScheduleFit(stops.length, Math.min(departureLimit, maxActiveDepartureCount), isStackedLayout, overlaySize);
+  const visibleDepartureCount = scheduleFit.visibleCount;
   const compactSchedule = visibleDepartureCount <= 2;
   const ultraCompactSchedule = visibleDepartureCount <= 1 && stops.length >= 3;
+  const emptySchedule = visibleDepartureCount === 0;
+  const scheduleScale = scheduleFit.scale;
+  const scheduleScaleStyle = getScheduleScaleStyle(scheduleFit, compactSchedule, ultraCompactSchedule);
 
   useEffect(() => {
     vehiclesRef.current = vehicles;
@@ -316,14 +334,67 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let intervalId: number | null = null;
 
     if (initialUrlState.stopIds.length === 0) {
       setStops([]);
       return;
     }
 
-    setStopsLoading(true);
-    setStopsError(null);
+    const refreshStops = (showLoading: boolean) => {
+      if (showLoading) {
+        setStopsLoading(true);
+      }
+      setStopsError(null);
+      lastStopRefreshAtRef.current = Date.now();
+
+      fetchStopsWithDepartures(initialUrlState.stopIds, departureLimit)
+        .then((result) => {
+          if (!cancelled) {
+            setStops(result);
+          }
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            setStopsError(error instanceof Error ? error.message : "Stop data request failed.");
+          }
+        })
+        .finally(() => {
+          if (!cancelled && showLoading) {
+            setStopsLoading(false);
+          }
+        });
+    };
+
+    refreshStops(true);
+    intervalId = window.setInterval(() => {
+      refreshStops(false);
+    }, STOP_REFRESH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [departureLimit, initialUrlState.stopIds]);
+
+  useEffect(() => {
+    if (initialUrlState.stopIds.length === 0 || stops.length === 0) {
+      return;
+    }
+
+    const hasUnderfilledVisibleRows = activeStops.some(
+      (stop) => stop.departures.length < visibleDepartureCount,
+    );
+    const canRefresh = Date.now() - lastStopRefreshAtRef.current >= STOP_REFRESH_MIN_INTERVAL_MS;
+
+    if (!hasUnderfilledVisibleRows || !canRefresh) {
+      return;
+    }
+
+    let cancelled = false;
+    lastStopRefreshAtRef.current = Date.now();
 
     fetchStopsWithDepartures(initialUrlState.stopIds, departureLimit)
       .then((result) => {
@@ -336,16 +407,11 @@ export default function App() {
           setStopsError(error instanceof Error ? error.message : "Stop data request failed.");
         }
       })
-      .finally(() => {
-        if (!cancelled) {
-          setStopsLoading(false);
-        }
-      });
 
     return () => {
       cancelled = true;
     };
-  }, [departureLimit, initialUrlState.stopIds]);
+  }, [activeStops, departureLimit, initialUrlState.stopIds, stops.length, visibleDepartureCount]);
 
   useEffect(() => {
     if (!mapReady || !stopSourceRef.current) {
@@ -455,92 +521,37 @@ export default function App() {
           const cardBottom = cardRect.bottom - rootRect.top;
           const mapIsToRight = mapLeft >= cardRight - 12;
           const mapIsBelow = mapTop >= cardBottom - 12;
-          const routeToMapBottom = mapIsBelow && index >= 2;
           const ribbonWidths = getLeaderRibbonWidths(stops.length, mapIsBelow, rootRect.width);
-
-          let spinePoints: Array<{ x: number; y: number }> = [];
-          let edgeX = 0;
-          let edgeY = 0;
-          let x2 = 0;
-          let y2 = 0;
-
-          if (routeToMapBottom) {
-            const cardCenterX = cardLeft + cardRect.width * 0.5;
-            const x1 = clamp(cardCenterX, cardLeft + 16, cardRight - 16);
-            const y1 = cardBottom - 2;
-            const routeOnLeft = cardCenterX < mapLeft + mapWidth * 0.5;
-            const sideX = routeOnLeft ? mapLeft + 18 : mapLeft + mapWidth - 18;
-            const topY = Math.max(y1 + 18, mapTop - 18);
-            edgeX = sideX;
-            edgeY = mapTop + mapHeight - 10;
-            x2 = clamp(mapLeft + projected.x, mapLeft + 28, mapLeft + mapWidth - 28);
-            y2 = clamp(mapTop + projected.y, mapTop + 28, mapTop + mapHeight - 32);
-            spinePoints = [
-              { x: x1, y: y1 },
-              { x: x1, y: topY },
-              { x: sideX, y: topY },
-              { x: edgeX, y: edgeY },
-              { x: x2, y: y2 },
-            ];
-          } else if (mapIsBelow) {
-            const x1 = clamp(cardLeft + cardRect.width * 0.5, cardLeft + 16, cardRight - 16);
-            const y1 = cardBottom - 2;
-            edgeX = clamp(mapLeft + projected.x, mapLeft + 16, mapLeft + mapWidth - 16);
-            edgeY = mapTop + 8;
-            x2 = edgeX;
-            y2 = clamp(mapTop + projected.y, mapTop + 28, mapTop + mapHeight - 20);
-            const bendY = y1 + Math.max(28, (edgeY - y1) * 0.45);
-            spinePoints = [
-              { x: x1, y: y1 },
-              { x: x1, y: bendY },
-              { x: edgeX, y: edgeY },
-              { x: x2, y: y2 },
-            ];
-          } else if (mapIsToRight) {
-            const x1 = cardRight - 2;
-            const y1 = cardTop + cardRect.height * 0.5;
-            x2 = clamp(mapLeft + projected.x, mapLeft + 28, mapLeft + mapWidth - 20);
-            y2 = clamp(mapTop + projected.y, mapTop + 8, mapTop + mapHeight - 8);
-            const bendX = x1 + 32;
-            edgeX = mapLeft + 8;
-            edgeY = interpolateLineYAtX(bendX, y1, x2, y2, edgeX);
-            spinePoints = [
-              { x: x1, y: y1 },
-              { x: bendX, y: y1 },
-              { x: x2, y: y2 },
-            ];
-          } else {
-            const x1 = cardRight - 2;
-            const y1 = cardTop + cardRect.height * 0.5;
-            x2 = clamp(mapLeft + projected.x, mapLeft + 28, mapLeft + mapWidth - 20);
-            y2 = clamp(mapTop + projected.y, mapTop + 8, mapTop + mapHeight - 8);
-            const bendX = x1 + 32;
-            edgeX = mapLeft + 8;
-            edgeY = interpolateLineYAtX(bendX, y1, x2, y2, edgeX);
-            spinePoints = [
-              { x: x1, y: y1 },
-              { x: bendX, y: y1 },
-              { x: x2, y: y2 },
-            ];
-          }
-
-          const polygon = buildRibbonPolygon(
-            spinePoints,
-            ribbonWidths.start,
-            ribbonWidths.end,
-          );
-          const spinePath = toSvgPath(spinePoints);
+          const stopPoint = {
+            x: clamp(mapLeft + projected.x, mapLeft + 24, mapLeft + mapWidth - 24),
+            y: clamp(mapTop + projected.y, mapTop + 24, mapTop + mapHeight - 24),
+          };
+          const leader = buildLeaderRibbon({
+            stopPoint,
+            cardRect: {
+              left: cardLeft,
+              top: cardTop,
+              right: cardRight,
+              bottom: cardBottom,
+              width: cardRect.width,
+              height: cardRect.height,
+            },
+            mapRect: {
+              left: mapLeft,
+              top: mapTop,
+              width: mapWidth,
+              height: mapHeight,
+            },
+            widths: ribbonWidths,
+            isStackedLayout: mapIsBelow || !mapIsToRight,
+          });
 
           return [
             {
               id: leaderId,
+              svgId: toSvgId(leaderId),
               color: STOP_MARKER_COLORS[index] ?? "#ffffff",
-              polygon,
-              spinePath,
-              edgeX,
-              edgeY,
-              dotX: x2,
-              dotY: y2,
+              ...leader,
             },
           ];
         });
@@ -638,7 +649,7 @@ export default function App() {
                 className="grid min-h-0 flex-1 gap-3"
                 style={stopBoardLayout}
               >
-                {stops.map((stop, index) => (
+                {activeStops.map((stop, index) => (
                   <section
                     key={getLeaderId(stop, index)}
                     data-testid="stop-card"
@@ -651,19 +662,19 @@ export default function App() {
                       }
                     }}
                     className={cn(
-                      "relative min-h-0 overflow-hidden rounded-[1.65rem] border backdrop-blur-md",
-                      ultraCompactSchedule ? "p-1.5 sm:p-2" : compactSchedule ? "p-2.5 sm:p-3" : "p-4",
+                      "relative flex min-h-0 flex-col overflow-hidden rounded-[1.65rem] border backdrop-blur-xl",
+                      emptySchedule ? "p-1 sm:p-1.5" : ultraCompactSchedule ? "p-1.5 sm:p-2" : compactSchedule ? "p-2.5 sm:p-3" : "p-4",
                     )}
                     style={getStopCardStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                   >
-                    <div className={cn("flex items-start gap-3", ultraCompactSchedule ? "mb-1" : compactSchedule ? "mb-2" : "mb-3")}>
+                    <div className={cn("flex items-start gap-3", emptySchedule ? "mb-0" : ultraCompactSchedule ? "mb-1" : compactSchedule ? "mb-2" : "mb-3")}>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className={cn("uppercase text-slate-300", ultraCompactSchedule ? "text-[8px] tracking-[0.1em]" : compactSchedule ? "text-[9px] tracking-[0.16em]" : "text-[10px] tracking-[0.22em]")}>
+                            <div className={cn("uppercase text-slate-300", emptySchedule ? "hidden" : ultraCompactSchedule ? "text-[8px] tracking-[0.1em]" : compactSchedule ? "text-[9px] tracking-[0.16em]" : "text-[10px] tracking-[0.22em]")}>
                               {stop.code} {stop.vehicleMode ? `· ${stop.vehicleMode}` : ""}
                             </div>
-                            <div className={cn("truncate font-semibold text-white", ultraCompactSchedule ? "mt-0.5 text-[clamp(0.72rem,2.8vw,0.9rem)] leading-none" : compactSchedule ? "mt-1 text-[clamp(0.86rem,2.6vw,1.05rem)] leading-tight" : "mt-1 text-[clamp(1rem,1.35vw,1.35rem)]")}>
+                            <div className={cn("truncate font-semibold text-white", emptySchedule ? "text-[clamp(0.62rem,2.4vw,0.78rem)] leading-none" : ultraCompactSchedule ? "mt-0.5 text-[clamp(0.72rem,2.8vw,0.9rem)] leading-none" : compactSchedule ? "mt-1 text-[clamp(0.86rem,2.6vw,1.05rem)] leading-tight" : "mt-1 text-[clamp(1rem,1.35vw,1.35rem)]")}>
                               {stop.name}
                             </div>
                           </div>
@@ -676,37 +687,41 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className={cn("grid", ultraCompactSchedule ? "gap-1" : compactSchedule ? "gap-1.5" : "gap-2")}>
+                    <div
+                      className="grid min-h-0 flex-1"
+                      data-testid="departure-list"
+                      data-visible-departures={String(visibleDepartureCount)}
+                      data-schedule-scale={scheduleScale.toFixed(2)}
+                      style={scheduleScaleStyle}
+                    >
                       {stop.departures.slice(0, visibleDepartureCount).map((departure) => (
                         <div
-                          key={`${stop.gtfsId}-${departure.serviceDay}-${departure.realtimeDeparture}-${departure.headsign}`}
+                          key={getDepartureKey(stop.gtfsId, departure)}
                           data-testid="departure-row"
                           className={cn(
-                            "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center rounded-2xl border border-white/8",
-                            ultraCompactSchedule && "grid-cols-[minmax(0,1fr)_auto] gap-1.5 rounded-xl px-1.5 py-1",
-                            compactSchedule && !ultraCompactSchedule ? "gap-2 px-2 py-2" : null,
-                            !compactSchedule ? "gap-3 px-3 py-3" : null,
+                            "departure-row-motion grid min-h-0 overflow-hidden items-center rounded-[var(--schedule-row-radius)] border border-white/10 px-[var(--schedule-row-px)] py-[var(--schedule-row-py)] transition-[opacity,transform] duration-500 ease-out",
+                            ultraCompactSchedule ? "grid-cols-[minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]" : "grid-cols-[auto_minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]",
                           )}
                           style={getStopRowStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                         >
-                          <div className={cn("items-center justify-center rounded-2xl bg-black/20", ultraCompactSchedule ? "hidden" : compactSchedule ? "flex h-8 w-8" : "flex h-12 w-12")}>
-                            <ModeIcon mode={departure.routeMode} className={compactSchedule ? "h-5 w-5" : "h-7 w-7"} />
+                          <div className={cn("items-center justify-center rounded-[var(--schedule-icon-radius)] bg-black/20", ultraCompactSchedule ? "hidden" : "flex h-[var(--schedule-icon-size)] w-[var(--schedule-icon-size)]")}>
+                            <ModeIcon mode={departure.routeMode} className="h-[var(--schedule-mode-icon-size)] w-[var(--schedule-mode-icon-size)]" />
                           </div>
 
-                          <div className="min-w-0">
+                          <div className="min-w-0 overflow-hidden">
                             <div className="flex items-end gap-2">
-                              <span className={cn("font-semibold leading-none text-white", ultraCompactSchedule ? "text-[clamp(0.88rem,3.4vw,1.05rem)]" : compactSchedule ? "text-[clamp(1rem,3.8vw,1.35rem)]" : "text-[clamp(1.35rem,2vw,2rem)]")}>
+                              <span className="text-[length:var(--schedule-route-size)] font-semibold leading-none text-white">
                                 {departure.routeShortName ?? departure.routeMode}
                               </span>
-                              <span className={cn("truncate pb-0.5 text-slate-200", ultraCompactSchedule ? "text-[10px]" : compactSchedule ? "text-xs" : "text-sm")}>{departure.headsign}</span>
+                              <span className="truncate pb-0.5 text-[length:var(--schedule-headsign-size)] text-slate-200">{departure.headsign}</span>
                             </div>
-                            <div className={cn("mt-1 uppercase text-slate-300", ultraCompactSchedule ? "hidden" : compactSchedule ? "text-[10px] tracking-[0.12em]" : "text-xs tracking-[0.18em]")}>
+                            <div className={cn("mt-[var(--schedule-time-mt)] truncate uppercase text-[length:var(--schedule-time-size)] leading-tight tracking-[var(--schedule-time-tracking)] text-slate-300", ultraCompactSchedule ? "hidden" : null)}>
                               {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
                             </div>
                           </div>
 
                           <div className="text-right">
-                            <div className={cn("font-semibold leading-none text-white tabular-nums", ultraCompactSchedule ? "text-[clamp(0.9rem,3.8vw,1.08rem)]" : compactSchedule ? "text-[clamp(1.05rem,4vw,1.45rem)]" : "text-[clamp(1.45rem,2.4vw,2.35rem)]")}>
+                            <div className="text-[length:var(--schedule-relative-size)] font-semibold leading-none text-white tabular-nums">
                               {formatRelativeMinutes(departure.serviceDay, departure.realtimeDeparture)}
                             </div>
                           </div>
@@ -752,26 +767,34 @@ export default function App() {
         preserveAspectRatio="none"
       >
         {leaderLines.map((line) => (
-          <g key={line.id}>
+          <g key={line.id} data-testid="leader-3d">
+            <defs>
+              <linearGradient id={`${line.svgId}-deck`} x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#ffffff" stopOpacity="0.36" />
+                <stop offset="18%" stopColor={line.color} stopOpacity="0.34" />
+                <stop offset="58%" stopColor={line.color} stopOpacity="0.18" />
+                <stop offset="100%" stopColor="#020617" stopOpacity="0.18" />
+              </linearGradient>
+            </defs>
             <polygon
+              data-testid="leader-ribbon"
               points={line.polygon}
+              fill={`url(#${line.svgId}-deck)`}
+              stroke={withAlpha(line.color, 0.26)}
+              strokeWidth="0.8"
+              strokeLinejoin="round"
+              opacity="0.86"
+            />
+            <circle
+              data-testid="leader-stop-cap"
+              cx={line.stopX}
+              cy={line.stopY}
+              r={line.stopRadius}
               fill={line.color}
-              stroke={withAlpha(line.color, 0.38)}
+              stroke="#ffffff"
               strokeWidth="1.5"
-              strokeLinejoin="round"
-              opacity="0.26"
+              opacity="0.92"
             />
-            <path
-              d={line.spinePath}
-              fill="none"
-              stroke={line.color}
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              opacity="0.4"
-            />
-            <circle cx={line.edgeX} cy={line.edgeY} r="3.5" fill={line.color} opacity="0.8" />
-            <circle cx={line.dotX} cy={line.dotY} r="4" fill={line.color} opacity="0.9" />
           </g>
         ))}
       </svg>
@@ -963,48 +986,162 @@ function formatClockTime(value: Date) {
 
 function getDepartureLimit(stopCount: number) {
   if (stopCount >= 4) {
-    return 3;
+    return 6;
   }
 
   if (stopCount === 3) {
-    return 4;
+    return 7;
   }
 
   if (stopCount === 2) {
-    return 5;
+    return 8;
   }
 
-  return 6;
+  return 9;
 }
 
-function getVisibleDepartureCount(
+function filterStopsWithActiveDepartures(stops: StopWithDepartures[], now: Date): StopWithDepartures[] {
+  return stops.map((stop) => ({
+    ...stop,
+    departures: stop.departures.filter((departure) => !isDepartureExpired(departure, now)),
+  }));
+}
+
+function isDepartureExpired(departure: Departure, now: Date) {
+  return getDepartureTimestamp(departure) + DEPARTURE_EXPIRY_GRACE_MS < now.getTime();
+}
+
+function getDepartureTimestamp(departure: Departure) {
+  return (departure.serviceDay + departure.realtimeDeparture) * 1000;
+}
+
+function getMaxDepartureCount(stops: StopWithDepartures[]) {
+  return stops.reduce((max, stop) => Math.max(max, stop.departures.length), 0);
+}
+
+function getDepartureKey(stopId: string, departure: Departure) {
+  return [
+    stopId,
+    departure.serviceDay,
+    departure.scheduledDeparture,
+    departure.realtimeDeparture,
+    departure.routeShortName ?? departure.routeMode,
+    departure.headsign,
+  ].join("-");
+}
+
+type ScheduleFit = {
+  visibleCount: number;
+  scale: number;
+};
+
+function getScheduleFit(
   stopCount: number,
+  maxDepartureCount: number,
   isStackedLayout: boolean,
   screenSize: { width: number; height: number },
 ) {
-  const height = screenSize.height;
+  const minScale = 0.72;
+  const maxScale = 1.16;
+  const boardHeight = isStackedLayout ? screenSize.height * 0.42 : screenSize.height - 132;
+  const layoutRows = isStackedLayout ? (stopCount <= 2 ? 1 : 2) : Math.max(stopCount, 1);
+  const cardHeight = boardHeight / Math.max(layoutRows, 1);
+  const maxCandidate = Math.max(0, maxDepartureCount);
+  const widthScale = screenSize.width < 420 ? 0.86 : screenSize.width < 640 ? 0.94 : 1;
 
-  if (stopCount >= 4) {
-    return height < 560 ? 0 : height >= 900 && !isStackedLayout ? 2 : 1;
+  if (stopCount >= 3 && isStackedLayout && cardHeight < 112) {
+    return {
+      visibleCount: 0,
+      scale: minScale,
+    };
   }
 
-  if (stopCount === 3) {
-    if (height < 560) {
-      return 0;
+  for (let visibleCount = maxCandidate; visibleCount >= 1; visibleCount -= 1) {
+    const headerReserve = getScheduleHeaderReserve(stopCount, visibleCount);
+    const rowGap = getScheduleBaseListGap(visibleCount);
+    const rowBudget = (cardHeight - headerReserve - rowGap * Math.max(0, visibleCount - 1)) / visibleCount;
+    const targetRowHeight = getScheduleTargetRowHeight(visibleCount);
+    const rawScale = (rowBudget / targetRowHeight) * widthScale;
+
+    if (rawScale >= minScale && rowBudget >= getScheduleMinimumRowHeight(visibleCount)) {
+      return {
+        visibleCount,
+        scale: clamp(rawScale, minScale, maxScale),
+      };
     }
-
-    if (isStackedLayout || height < 760) {
-      return 1;
-    }
-
-    return height >= 900 && !isStackedLayout ? 3 : 2;
   }
 
-  if (stopCount === 2) {
-    return height < 620 ? 2 : 4;
+  return {
+    visibleCount: maxCandidate > 0 && cardHeight >= 74 ? 1 : 0,
+    scale: minScale,
+  };
+}
+
+function getScheduleScaleStyle(
+  fit: ScheduleFit,
+  compactSchedule: boolean,
+  ultraCompactSchedule: boolean,
+): CSSProperties {
+  const { scale, visibleCount } = fit;
+  const contentScale = Math.min(scale, 0.96);
+  const rowPadX = ultraCompactSchedule ? 6 : compactSchedule ? 8 : 12;
+  const rowPadY = ultraCompactSchedule ? 5 : compactSchedule ? 9 : 13;
+  const iconSize = compactSchedule ? 32 : 48;
+  const modeIconSize = compactSchedule ? 20 : 28;
+  const rowGap = ultraCompactSchedule ? 6 : compactSchedule ? 8 : 12;
+  const listGap = ultraCompactSchedule ? 4 : compactSchedule ? 6 : 8;
+
+  return {
+    gap: `${Math.max(3, Math.round(listGap * scale))}px`,
+    gridTemplateRows: visibleCount > 0 ? `repeat(${visibleCount}, minmax(0, var(--schedule-row-max-height)))` : undefined,
+    alignContent: "space-between",
+    "--schedule-row-gap": `${Math.max(5, Math.round(rowGap * scale))}px`,
+    "--schedule-row-px": `${Math.max(5, Math.round(rowPadX * scale))}px`,
+    "--schedule-row-py": `${Math.max(3, Math.round(rowPadY * scale))}px`,
+    "--schedule-row-radius": `${Math.max(12, Math.round((ultraCompactSchedule ? 12 : 16) * Math.min(scale, 1.08)))}px`,
+    "--schedule-icon-radius": `${Math.max(10, Math.round(16 * contentScale))}px`,
+    "--schedule-icon-size": `${Math.max(24, Math.round(iconSize * contentScale))}px`,
+    "--schedule-mode-icon-size": `${Math.max(16, Math.round(modeIconSize * contentScale))}px`,
+    "--schedule-route-size": `${(ultraCompactSchedule ? 1.0 * contentScale : compactSchedule ? 1.18 * contentScale : 1.72 * contentScale).toFixed(3)}rem`,
+    "--schedule-headsign-size": `${(ultraCompactSchedule ? 0.66 * contentScale : compactSchedule ? 0.75 * contentScale : 0.9 * contentScale).toFixed(3)}rem`,
+    "--schedule-time-size": `${(compactSchedule ? 0.62 * contentScale : 0.75 * contentScale).toFixed(3)}rem`,
+    "--schedule-relative-size": `${(ultraCompactSchedule ? 1.02 * contentScale : compactSchedule ? 1.32 * contentScale : 2.0 * contentScale).toFixed(3)}rem`,
+    "--schedule-time-mt": `${Math.max(2, Math.round(4 * contentScale))}px`,
+    "--schedule-time-tracking": compactSchedule ? "0.12em" : "0.18em",
+    "--schedule-row-max-height": `${Math.max(38, Math.round(getScheduleTargetRowHeight(visibleCount) * scale))}px`,
+  } as CSSProperties;
+}
+
+function getScheduleHeaderReserve(stopCount: number, visibleCount: number) {
+  if (visibleCount <= 1) {
+    return stopCount >= 3 ? 38 : 44;
   }
 
-  return height < 520 ? 3 : 6;
+  return stopCount >= 3 ? 50 : 66;
+}
+
+function getScheduleBaseListGap(visibleCount: number) {
+  if (visibleCount <= 1) {
+    return 4;
+  }
+
+  return visibleCount <= 2 ? 7 : 10;
+}
+
+function getScheduleTargetRowHeight(visibleCount: number) {
+  if (visibleCount <= 1) {
+    return 54;
+  }
+
+  return visibleCount <= 2 ? 62 : 74;
+}
+
+function getScheduleMinimumRowHeight(visibleCount: number) {
+  if (visibleCount <= 1) {
+    return 34;
+  }
+
+  return visibleCount <= 2 ? 56 : 50;
 }
 
 function getStopBoardLayout(stopCount: number, isStackedLayout: boolean) {
@@ -1038,89 +1175,211 @@ function getLeaderId(stop: StopWithDepartures, index: number) {
   return `${stop.gtfsId}-${index}`;
 }
 
+function toSvgId(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
 function getLeaderRibbonWidths(stopCount: number, isStackedLayout: boolean, screenWidth: number) {
   const densityScale = stopCount >= 3 ? 0.72 : 1;
   const screenScale = screenWidth < 520 ? 0.56 : screenWidth < 768 ? 0.68 : 1;
-  const layoutScale = isStackedLayout ? 0.82 : 1;
+  const layoutScale = isStackedLayout ? 0.76 : 1;
   const scale = densityScale * screenScale * layoutScale;
 
   return {
-    start: Math.max(34, Math.round(102 * scale)),
-    end: Math.max(16, Math.round(30 * scale)),
+    start: Math.max(12, Math.round(22 * scale)),
+    end: Math.max(28, Math.round(96 * scale)),
   };
+}
+
+function buildLeaderRibbon({
+  stopPoint,
+  cardRect,
+  mapRect,
+  widths,
+  isStackedLayout,
+}: {
+  stopPoint: ScreenPoint;
+  cardRect: { left: number; top: number; right: number; bottom: number; width: number; height: number };
+  mapRect: { left: number; top: number; width: number; height: number };
+  widths: { start: number; end: number };
+  isStackedLayout: boolean;
+}) {
+  const cardAnchor = isStackedLayout
+    ? {
+        x: cardRect.left + cardRect.width * 0.5,
+        y: cardRect.bottom,
+      }
+    : {
+        x: cardRect.right,
+        y: cardRect.top + cardRect.height * 0.5,
+      };
+
+  const spinePoints = isStackedLayout
+    ? buildStackedLeaderSpine(stopPoint, cardAnchor, mapRect)
+    : buildDesktopLeaderSpine(stopPoint, cardAnchor);
+  const ribbonPoints = buildRibbonPolygonPoints(
+    spinePoints,
+    spinePoints.map((_, index) => {
+      if (index === 0) {
+        return widths.start;
+      }
+
+      if (index === spinePoints.length - 1) {
+        return widths.end;
+      }
+
+      return widths.end * 0.74;
+    }),
+  );
+
+  return {
+    polygon: toPolygonPoints(ribbonPoints),
+    stopX: stopPoint.x,
+    stopY: stopPoint.y,
+    cardX: cardAnchor.x,
+    cardY: cardAnchor.y,
+    stopRadius: Math.max(4, widths.start * 0.34),
+  };
+}
+
+function buildDesktopLeaderSpine(stopPoint: ScreenPoint, cardAnchor: ScreenPoint) {
+  const dropX = cardAnchor.x + 56;
+
+  return [
+    stopPoint,
+    { x: dropX, y: cardAnchor.y },
+    cardAnchor,
+  ];
+}
+
+function buildStackedLeaderSpine(
+  stopPoint: ScreenPoint,
+  cardAnchor: ScreenPoint,
+  mapRect: { left: number; top: number; width: number },
+) {
+  const dropY = Math.max(cardAnchor.y + 44, mapRect.top + 10);
+
+  return [
+    stopPoint,
+    { x: cardAnchor.x, y: dropY },
+    cardAnchor,
+  ];
 }
 
 function getStopCardStyle(color: string) {
   return {
-    borderColor: withAlpha(color, 0.34),
-    background: `linear-gradient(145deg, ${withAlpha(color, 0.2)}, ${withAlpha(color, 0.08)} 46%, rgba(2, 6, 23, 0.52))`,
-    boxShadow: `inset 0 1px 0 ${withAlpha(color, 0.22)}, 0 18px 48px rgba(2, 6, 23, 0.24)`,
+    borderColor: withAlpha(color, 0.46),
+    background: [
+      `linear-gradient(145deg, ${withAlpha("#ffffff", 0.16)}, transparent 24%)`,
+      `linear-gradient(155deg, ${withAlpha(color, 0.32)}, ${withAlpha(color, 0.12)} 44%, rgba(2, 6, 23, 0.7) 100%)`,
+    ].join(", "),
+    boxShadow: [
+      `inset 0 1px 0 ${withAlpha("#ffffff", 0.28)}`,
+      `inset 0 -22px 42px ${withAlpha("#020617", 0.34)}`,
+      `0 28px 70px rgba(2, 6, 23, 0.46)`,
+      `0 0 42px ${withAlpha(color, 0.14)}`,
+    ].join(", "),
   };
 }
 
 function getStopRowStyle(color: string) {
   return {
-    borderColor: withAlpha(color, 0.2),
-    background: `linear-gradient(135deg, ${withAlpha(color, 0.14)}, rgba(2, 6, 23, 0.3) 62%)`,
+    borderColor: withAlpha(color, 0.28),
+    background: [
+      `linear-gradient(140deg, ${withAlpha("#ffffff", 0.12)}, transparent 28%)`,
+      `linear-gradient(135deg, ${withAlpha(color, 0.18)}, rgba(2, 6, 23, 0.46) 68%)`,
+    ].join(", "),
+    boxShadow: `inset 0 1px 0 ${withAlpha("#ffffff", 0.14)}, 0 12px 30px rgba(2, 6, 23, 0.22)`,
   };
 }
 
-function interpolateLineYAtX(x1: number, y1: number, x2: number, y2: number, targetX: number) {
-  if (Math.abs(x2 - x1) < 0.001) {
-    return y2;
-  }
-
-  const progress = clamp((targetX - x1) / (x2 - x1), 0, 1);
-  return lerp(y1, y2, progress);
-}
-
-function buildRibbonPolygon(
-  points: Array<{ x: number; y: number }>,
-  startWidth: number,
-  endWidth: number,
+function buildRibbonPolygonPoints(
+  points: ScreenPoint[],
+  widths: number[],
 ) {
   if (points.length < 2) {
-    return "";
+    return [];
   }
 
-  const left: Array<{ x: number; y: number }> = [];
-  const right: Array<{ x: number; y: number }> = [];
+  const left: ScreenPoint[] = [];
+  const right: ScreenPoint[] = [];
 
   for (let index = 0; index < points.length; index += 1) {
     const point = points[index];
-    const prev = points[Math.max(0, index - 1)];
-    const next = points[Math.min(points.length - 1, index + 1)];
-    const tangent = normalize({
-      x: next.x - prev.x,
-      y: next.y - prev.y,
-    });
-    const normal = {
-      x: -tangent.y,
-      y: tangent.x,
-    };
-    const progress = points.length === 1 ? 1 : index / (points.length - 1);
-    const width = lerp(startWidth, endWidth, progress);
+    const halfWidth = (widths[index] ?? widths[widths.length - 1] ?? 0) / 2;
 
-    left.push({
-      x: point.x + normal.x * (width / 2),
-      y: point.y + normal.y * (width / 2),
-    });
-    right.push({
-      x: point.x - normal.x * (width / 2),
-      y: point.y - normal.y * (width / 2),
-    });
+    if (index === 0) {
+      const normal = getSegmentNormal(points[0], points[1]);
+      left.push(offsetPoint(point, normal, halfWidth));
+      right.push(offsetPoint(point, normal, -halfWidth));
+      continue;
+    }
+
+    if (index === points.length - 1) {
+      const normal = getSegmentNormal(points[index - 1], point);
+      left.push(offsetPoint(point, normal, halfWidth));
+      right.push(offsetPoint(point, normal, -halfWidth));
+      continue;
+    }
+
+    left.push(getJoinedOffsetPoint(points[index - 1], point, points[index + 1], halfWidth));
+    right.push(getJoinedOffsetPoint(points[index - 1], point, points[index + 1], -halfWidth));
   }
 
-  return [...left, ...right.reverse()].map((point) => `${point.x},${point.y}`).join(" ");
+  return [...left, ...right.reverse()];
 }
 
-function toSvgPath(points: Array<{ x: number; y: number }>) {
-  if (points.length === 0) {
-    return "";
+function getJoinedOffsetPoint(prev: ScreenPoint, point: ScreenPoint, next: ScreenPoint, offset: number) {
+  const incomingNormal = getSegmentNormal(prev, point);
+  const outgoingNormal = getSegmentNormal(point, next);
+  const incomingStart = offsetPoint(prev, incomingNormal, offset);
+  const incomingEnd = offsetPoint(point, incomingNormal, offset);
+  const outgoingStart = offsetPoint(point, outgoingNormal, offset);
+  const outgoingEnd = offsetPoint(next, outgoingNormal, offset);
+
+  return getLineIntersection(incomingStart, incomingEnd, outgoingStart, outgoingEnd) ?? outgoingStart;
+}
+
+function getSegmentNormal(start: ScreenPoint, end: ScreenPoint) {
+  const tangent = normalize({
+    x: end.x - start.x,
+    y: end.y - start.y,
+  });
+
+  return {
+    x: -tangent.y,
+    y: tangent.x,
+  };
+}
+
+function offsetPoint(point: ScreenPoint, normal: ScreenPoint, offset: number) {
+  return {
+    x: point.x + normal.x * offset,
+    y: point.y + normal.y * offset,
+  };
+}
+
+function getLineIntersection(a1: ScreenPoint, a2: ScreenPoint, b1: ScreenPoint, b2: ScreenPoint) {
+  const aDx = a2.x - a1.x;
+  const aDy = a2.y - a1.y;
+  const bDx = b2.x - b1.x;
+  const bDy = b2.y - b1.y;
+  const denominator = aDx * bDy - aDy * bDx;
+
+  if (Math.abs(denominator) < 0.001) {
+    return null;
   }
 
-  const [first, ...rest] = points;
-  return `M ${first.x} ${first.y}${rest.map((point) => ` L ${point.x} ${point.y}`).join("")}`;
+  const progress = ((b1.x - a1.x) * bDy - (b1.y - a1.y) * bDx) / denominator;
+
+  return {
+    x: a1.x + progress * aDx,
+    y: a1.y + progress * aDy,
+  };
+}
+
+function toPolygonPoints(points: ScreenPoint[]) {
+  return points.map((point) => `${point.x},${point.y}`).join(" ");
 }
 
 function normalize(vector: { x: number; y: number }) {
