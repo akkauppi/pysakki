@@ -86,6 +86,7 @@ export default function App() {
   const vehiclesRef = useRef<Map<string, VehicleSnapshot>>(new Map());
   const stopCardRefs = useRef(new Map<string, HTMLElement>());
   const lastStopRefreshAtRef = useRef(0);
+  const previousScheduleRowVariantRef = useRef<ScheduleRowVariant>("compact");
 
   const vehicleMqttTopics = useMemo(
     () => getVehicleMqttTopics(vehicleBounds),
@@ -98,13 +99,23 @@ export default function App() {
   const isStackedLayout = overlaySize.width < 768;
   const stopBoardLayout = getStopBoardLayout(stops.length, isStackedLayout);
   const maxActiveDepartureCount = getMaxDepartureCount(activeStops);
-  const scheduleFit = getScheduleFit(stops.length, Math.min(departureLimit, maxActiveDepartureCount), isStackedLayout, overlaySize);
+  const scheduleFit = getScheduleFit(
+    stops.length,
+    Math.min(departureLimit, maxActiveDepartureCount),
+    isStackedLayout,
+    overlaySize,
+    previousScheduleRowVariantRef.current,
+  );
+  previousScheduleRowVariantRef.current = scheduleFit.rowVariant;
   const visibleDepartureCount = scheduleFit.visibleCount;
   const compactSchedule = visibleDepartureCount <= 2;
-  const ultraCompactSchedule = visibleDepartureCount <= 1 && stops.length >= 3;
+  const showScheduledTime = scheduleFit.rowVariant === "full";
+  const showModeIcon = scheduleFit.rowVariant !== "compact";
+  const ultraCompactSchedule = scheduleFit.rowVariant === "compact";
+  const denseScheduleHeader = scheduleFit.rowVariant !== "full" || stops.length >= 4;
   const emptySchedule = visibleDepartureCount === 0;
   const scheduleScale = scheduleFit.scale;
-  const scheduleScaleStyle = getScheduleScaleStyle(scheduleFit, compactSchedule, ultraCompactSchedule);
+  const scheduleScaleStyle = getScheduleScaleStyle(scheduleFit, compactSchedule);
 
   useEffect(() => {
     vehiclesRef.current = vehicles;
@@ -662,8 +673,9 @@ export default function App() {
                       }
                     }}
                     className={cn(
-                      "relative flex min-h-0 flex-col overflow-hidden rounded-[1.65rem] border backdrop-blur-xl",
-                      emptySchedule ? "p-1 sm:p-1.5" : ultraCompactSchedule ? "p-1.5 sm:p-2" : compactSchedule ? "p-2.5 sm:p-3" : "p-4",
+                      "relative flex min-h-0 flex-col overflow-hidden border backdrop-blur-xl",
+                      ultraCompactSchedule ? "rounded-[1.35rem]" : compactSchedule ? "rounded-[1.5rem]" : "rounded-[1.65rem]",
+                      emptySchedule ? "p-1 sm:p-1.5" : ultraCompactSchedule ? "p-2 sm:p-2.5" : compactSchedule ? "p-2.5 sm:p-3" : "p-4",
                     )}
                     style={getStopCardStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                   >
@@ -671,10 +683,10 @@ export default function App() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className={cn("uppercase text-slate-300", emptySchedule ? "hidden" : ultraCompactSchedule ? "text-[8px] tracking-[0.1em]" : compactSchedule ? "text-[9px] tracking-[0.16em]" : "text-[10px] tracking-[0.22em]")}>
+                            <div className={cn("uppercase text-slate-300", emptySchedule || denseScheduleHeader ? "hidden" : ultraCompactSchedule ? "text-[8px] tracking-[0.1em]" : compactSchedule ? "text-[9px] tracking-[0.16em]" : "text-[10px] tracking-[0.22em]")}>
                               {stop.code} {stop.vehicleMode ? `· ${stop.vehicleMode}` : ""}
                             </div>
-                            <div className={cn("truncate font-semibold text-white", emptySchedule ? "text-[clamp(0.62rem,2.4vw,0.78rem)] leading-none" : ultraCompactSchedule ? "mt-0.5 text-[clamp(0.72rem,2.8vw,0.9rem)] leading-none" : compactSchedule ? "mt-1 text-[clamp(0.86rem,2.6vw,1.05rem)] leading-tight" : "mt-1 text-[clamp(1rem,1.35vw,1.35rem)]")}>
+                            <div className={cn("truncate font-semibold text-white", emptySchedule ? "text-[clamp(0.62rem,2.4vw,0.78rem)] leading-none" : denseScheduleHeader ? "text-[clamp(0.76rem,2.4vw,0.95rem)] leading-tight" : ultraCompactSchedule ? "mt-0.5 text-[clamp(0.72rem,2.8vw,0.9rem)] leading-none" : compactSchedule ? "mt-1 text-[clamp(0.86rem,2.6vw,1.05rem)] leading-tight" : "mt-1 text-[clamp(1rem,1.35vw,1.35rem)]")}>
                               {stop.name}
                             </div>
                           </div>
@@ -692,6 +704,7 @@ export default function App() {
                       data-testid="departure-list"
                       data-visible-departures={String(visibleDepartureCount)}
                       data-schedule-scale={scheduleScale.toFixed(2)}
+                      data-schedule-variant={scheduleFit.rowVariant}
                       style={scheduleScaleStyle}
                     >
                       {stop.departures.slice(0, visibleDepartureCount).map((departure) => (
@@ -700,13 +713,15 @@ export default function App() {
                           data-testid="departure-row"
                           className={cn(
                             "departure-row-motion grid min-h-0 overflow-hidden items-center rounded-[var(--schedule-row-radius)] border border-white/10 px-[var(--schedule-row-px)] py-[var(--schedule-row-py)] transition-[opacity,transform] duration-500 ease-out",
-                            ultraCompactSchedule ? "grid-cols-[minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]" : "grid-cols-[auto_minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]",
+                            showModeIcon ? "grid-cols-[auto_minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]" : "grid-cols-[minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]",
                           )}
                           style={getStopRowStyle(STOP_MARKER_COLORS[index] ?? "#ffffff")}
                         >
-                          <div className={cn("items-center justify-center rounded-[var(--schedule-icon-radius)] bg-black/20", ultraCompactSchedule ? "hidden" : "flex h-[var(--schedule-icon-size)] w-[var(--schedule-icon-size)]")}>
-                            <ModeIcon mode={departure.routeMode} className="h-[var(--schedule-mode-icon-size)] w-[var(--schedule-mode-icon-size)]" />
-                          </div>
+                          {showModeIcon ? (
+                            <div data-testid="departure-mode-icon" className="flex h-[var(--schedule-icon-size)] w-[var(--schedule-icon-size)] items-center justify-center rounded-[var(--schedule-icon-radius)] bg-black/20">
+                              <ModeIcon mode={departure.routeMode} className="h-[var(--schedule-mode-icon-size)] w-[var(--schedule-mode-icon-size)]" />
+                            </div>
+                          ) : null}
 
                           <div className="min-w-0 overflow-hidden">
                             <div className="flex items-end gap-2">
@@ -715,9 +730,11 @@ export default function App() {
                               </span>
                               <span className="truncate pb-0.5 text-[length:var(--schedule-headsign-size)] text-slate-200">{departure.headsign}</span>
                             </div>
-                            <div className={cn("mt-[var(--schedule-time-mt)] truncate uppercase text-[length:var(--schedule-time-size)] leading-tight tracking-[var(--schedule-time-tracking)] text-slate-300", ultraCompactSchedule ? "hidden" : null)}>
-                              {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
-                            </div>
+                            {showScheduledTime ? (
+                              <div data-testid="departure-scheduled-time" className="mt-[var(--schedule-time-mt)] truncate uppercase text-[length:var(--schedule-time-size)] leading-tight tracking-[var(--schedule-time-tracking)] text-slate-300">
+                                {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
+                              </div>
+                            ) : null}
                           </div>
 
                           <div className="text-right">
@@ -741,11 +758,17 @@ export default function App() {
         >
           <div ref={mapContainerRef} className="absolute inset-0" />
 
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-3">
-            <div className="pointer-events-auto max-w-[min(92%,38rem)] rounded-2xl border border-white/10 bg-slate-950/68 px-3 py-2 text-center text-[10px] leading-4 text-slate-300 backdrop-blur-md">
-              Realtime data: HSL Digitransit | Digitransit data is licensed under CC BY 4.0. |
-              {" "}
-              © OpenMapTiles © OpenStreetMap contributors
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center px-3 py-2 sm:p-3">
+            <div
+              data-testid="map-attribution"
+              className="pointer-events-auto max-w-[calc(100%-1rem)] truncate rounded-md border border-white/5 bg-slate-950/30 px-2 py-0.5 text-center text-[8px] leading-4 text-slate-400/75 backdrop-blur-[2px] sm:max-w-[min(92%,38rem)] sm:rounded-2xl sm:border-white/10 sm:bg-slate-950/68 sm:px-3 sm:py-2 sm:text-[10px] sm:leading-4 sm:text-slate-300 sm:backdrop-blur-md"
+            >
+              <span className="sm:hidden">HSL Digitransit · © OpenMapTiles · © OSM</span>
+              <span className="hidden sm:inline">
+                Realtime data: HSL Digitransit | Digitransit data is licensed under CC BY 4.0. |
+                {" "}
+                © OpenMapTiles © OpenStreetMap contributors
+              </span>
             </div>
           </div>
 
@@ -775,15 +798,37 @@ export default function App() {
                 <stop offset="58%" stopColor={line.color} stopOpacity="0.18" />
                 <stop offset="100%" stopColor="#020617" stopOpacity="0.18" />
               </linearGradient>
+              <linearGradient id={`${line.svgId}-rim`} x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#ffffff" stopOpacity="0.26" />
+                <stop offset="28%" stopColor={line.color} stopOpacity="0.46" />
+                <stop offset="72%" stopColor={line.color} stopOpacity="0.32" />
+                <stop offset="100%" stopColor={line.color} stopOpacity="0.22" />
+              </linearGradient>
             </defs>
+            <polygon
+              points={line.polygon}
+              fill="none"
+              stroke={withAlpha(line.color, 0.18)}
+              strokeWidth="2"
+              strokeLinejoin="round"
+              opacity="0.58"
+            />
             <polygon
               data-testid="leader-ribbon"
               points={line.polygon}
               fill={`url(#${line.svgId}-deck)`}
-              stroke={withAlpha(line.color, 0.26)}
-              strokeWidth="0.8"
+              stroke={`url(#${line.svgId}-rim)`}
+              strokeWidth="0.9"
               strokeLinejoin="round"
               opacity="0.86"
+            />
+            <polygon
+              points={line.polygon}
+              fill="none"
+              stroke={withAlpha("#ffffff", 0.12)}
+              strokeWidth="0.4"
+              strokeLinejoin="round"
+              opacity="0.58"
             />
             <circle
               data-testid="leader-stop-cap"
@@ -1030,9 +1075,14 @@ function getDepartureKey(stopId: string, departure: Departure) {
   ].join("-");
 }
 
+type ScheduleRowVariant = "full" | "compactIcon" | "compact";
+
 type ScheduleFit = {
   visibleCount: number;
   scale: number;
+  contentScale: number;
+  rowVariant: ScheduleRowVariant;
+  rowHeight: number;
 };
 
 function getScheduleFit(
@@ -1040,19 +1090,25 @@ function getScheduleFit(
   maxDepartureCount: number,
   isStackedLayout: boolean,
   screenSize: { width: number; height: number },
-) {
+  previousRowVariant: ScheduleRowVariant,
+): ScheduleFit {
   const minScale = 0.72;
   const maxScale = 1.16;
+  const minComfortInset = 8;
   const boardHeight = isStackedLayout ? screenSize.height * 0.42 : screenSize.height - 132;
   const layoutRows = isStackedLayout ? (stopCount <= 2 ? 1 : 2) : Math.max(stopCount, 1);
-  const cardHeight = boardHeight / Math.max(layoutRows, 1);
+  const cardHeight = boardHeight / Math.max(layoutRows, 1) - getScheduleCardSafetyReserve(stopCount, isStackedLayout);
   const maxCandidate = Math.max(0, maxDepartureCount);
-  const widthScale = screenSize.width < 420 ? 0.86 : screenSize.width < 640 ? 0.94 : 1;
+  const widthScale = screenSize.width < 390 ? 0.82 : screenSize.width < 430 ? 0.88 : screenSize.width < 640 ? 0.94 : 1;
+  const variants = getScheduleVariantPriority(isStackedLayout, screenSize.height, previousRowVariant);
 
   if (stopCount >= 3 && isStackedLayout && cardHeight < 112) {
     return {
       visibleCount: 0,
       scale: minScale,
+      contentScale: minScale,
+      rowVariant: "compact",
+      rowHeight: 0,
     };
   }
 
@@ -1061,54 +1117,86 @@ function getScheduleFit(
     const rowGap = getScheduleBaseListGap(visibleCount);
     const rowBudget = (cardHeight - headerReserve - rowGap * Math.max(0, visibleCount - 1)) / visibleCount;
     const targetRowHeight = getScheduleTargetRowHeight(visibleCount);
-    const rawScale = (rowBudget / targetRowHeight) * widthScale;
+    const rowHeight = Math.min(rowBudget, targetRowHeight * maxScale);
+    const scale = clamp(rowHeight / targetRowHeight, minScale, maxScale);
+    const contentScale = clamp(scale * widthScale, minScale, Math.min(maxScale, 0.98));
 
-    if (rawScale >= minScale && rowBudget >= getScheduleMinimumRowHeight(visibleCount)) {
-      return {
-        visibleCount,
-        scale: clamp(rawScale, minScale, maxScale),
-      };
+    for (const rowVariant of variants) {
+      if (rowBudget >= getScheduleMinimumRowHeight(visibleCount, rowVariant, minComfortInset)) {
+        return {
+          visibleCount,
+          scale,
+          contentScale,
+          rowVariant,
+          rowHeight,
+        };
+      }
     }
   }
 
   return {
     visibleCount: maxCandidate > 0 && cardHeight >= 74 ? 1 : 0,
     scale: minScale,
+    contentScale: minScale,
+    rowVariant: "compact",
+    rowHeight: maxCandidate > 0 && cardHeight >= 74 ? Math.max(38, Math.min(cardHeight - getScheduleHeaderReserve(stopCount, 1), getScheduleTargetRowHeight(1))) : 0,
   };
+}
+
+function getScheduleVariantPriority(
+  isStackedLayout: boolean,
+  screenHeight: number,
+  previousRowVariant: ScheduleRowVariant,
+): ScheduleRowVariant[] {
+  if (!isStackedLayout) {
+    return ["full", "compactIcon", "compact"];
+  }
+
+  if (screenHeight < 720) {
+    return ["compact"];
+  }
+
+  if (screenHeight >= 760 || previousRowVariant === "compactIcon" || previousRowVariant === "full") {
+    return ["compactIcon", "compact"];
+  }
+
+  return ["compact"];
 }
 
 function getScheduleScaleStyle(
   fit: ScheduleFit,
   compactSchedule: boolean,
-  ultraCompactSchedule: boolean,
 ): CSSProperties {
-  const { scale, visibleCount } = fit;
-  const contentScale = Math.min(scale, 0.96);
-  const rowPadX = ultraCompactSchedule ? 6 : compactSchedule ? 8 : 12;
-  const rowPadY = ultraCompactSchedule ? 5 : compactSchedule ? 9 : 13;
+  const { scale, contentScale, rowVariant, rowHeight, visibleCount } = fit;
+  const hasIcon = rowVariant !== "compact";
+  const rowPadX = hasIcon ? (compactSchedule ? 9 : 12) : 10;
+  const rowPadY = hasIcon ? (compactSchedule ? 9 : 13) : 9;
   const iconSize = compactSchedule ? 32 : 48;
   const modeIconSize = compactSchedule ? 20 : 28;
-  const rowGap = ultraCompactSchedule ? 6 : compactSchedule ? 8 : 12;
-  const listGap = ultraCompactSchedule ? 4 : compactSchedule ? 6 : 8;
+  const rowGap = hasIcon ? (compactSchedule ? 8 : 12) : 8;
+  const listGap = hasIcon ? (compactSchedule ? 6 : 8) : 6;
+  const comfortableIconSize = Math.max(0, rowHeight - 16);
+  const resolvedIconSize = Math.min(Math.max(24, Math.round(iconSize * contentScale)), comfortableIconSize);
+  const maxRowRadius = rowVariant === "compact" ? 14 : compactSchedule ? 16 : 18;
 
   return {
     gap: `${Math.max(3, Math.round(listGap * scale))}px`,
-    gridTemplateRows: visibleCount > 0 ? `repeat(${visibleCount}, minmax(0, var(--schedule-row-max-height)))` : undefined,
+    gridTemplateRows: visibleCount > 0 ? `repeat(${visibleCount}, var(--schedule-row-height))` : undefined,
     alignContent: "space-between",
     "--schedule-row-gap": `${Math.max(5, Math.round(rowGap * scale))}px`,
-    "--schedule-row-px": `${Math.max(5, Math.round(rowPadX * scale))}px`,
-    "--schedule-row-py": `${Math.max(3, Math.round(rowPadY * scale))}px`,
-    "--schedule-row-radius": `${Math.max(12, Math.round((ultraCompactSchedule ? 12 : 16) * Math.min(scale, 1.08)))}px`,
+    "--schedule-row-px": `${Math.max(8, Math.round(rowPadX * scale))}px`,
+    "--schedule-row-py": `${Math.max(8, Math.round(rowPadY * scale))}px`,
+    "--schedule-row-radius": `${Math.max(10, Math.min(maxRowRadius, Math.round(rowHeight * 0.3)))}px`,
     "--schedule-icon-radius": `${Math.max(10, Math.round(16 * contentScale))}px`,
-    "--schedule-icon-size": `${Math.max(24, Math.round(iconSize * contentScale))}px`,
+    "--schedule-icon-size": `${Math.round(resolvedIconSize)}px`,
     "--schedule-mode-icon-size": `${Math.max(16, Math.round(modeIconSize * contentScale))}px`,
-    "--schedule-route-size": `${(ultraCompactSchedule ? 1.0 * contentScale : compactSchedule ? 1.18 * contentScale : 1.72 * contentScale).toFixed(3)}rem`,
-    "--schedule-headsign-size": `${(ultraCompactSchedule ? 0.66 * contentScale : compactSchedule ? 0.75 * contentScale : 0.9 * contentScale).toFixed(3)}rem`,
+    "--schedule-route-size": `${(hasIcon ? (compactSchedule ? 1.18 * contentScale : 1.72 * contentScale) : 1.0 * contentScale).toFixed(3)}rem`,
+    "--schedule-headsign-size": `${(hasIcon ? (compactSchedule ? 0.75 * contentScale : 0.9 * contentScale) : 0.68 * contentScale).toFixed(3)}rem`,
     "--schedule-time-size": `${(compactSchedule ? 0.62 * contentScale : 0.75 * contentScale).toFixed(3)}rem`,
-    "--schedule-relative-size": `${(ultraCompactSchedule ? 1.02 * contentScale : compactSchedule ? 1.32 * contentScale : 2.0 * contentScale).toFixed(3)}rem`,
+    "--schedule-relative-size": `${(hasIcon ? (compactSchedule ? 1.32 * contentScale : 2.0 * contentScale) : 1.02 * contentScale).toFixed(3)}rem`,
     "--schedule-time-mt": `${Math.max(2, Math.round(4 * contentScale))}px`,
     "--schedule-time-tracking": compactSchedule ? "0.12em" : "0.18em",
-    "--schedule-row-max-height": `${Math.max(38, Math.round(getScheduleTargetRowHeight(visibleCount) * scale))}px`,
+    "--schedule-row-height": `${Math.max(38, Math.round(rowHeight))}px`,
   } as CSSProperties;
 }
 
@@ -1118,6 +1206,14 @@ function getScheduleHeaderReserve(stopCount: number, visibleCount: number) {
   }
 
   return stopCount >= 3 ? 50 : 66;
+}
+
+function getScheduleCardSafetyReserve(stopCount: number, isStackedLayout: boolean) {
+  if (isStackedLayout) {
+    return stopCount >= 3 ? 20 : 14;
+  }
+
+  return stopCount >= 3 ? 24 : 18;
 }
 
 function getScheduleBaseListGap(visibleCount: number) {
@@ -1136,12 +1232,20 @@ function getScheduleTargetRowHeight(visibleCount: number) {
   return visibleCount <= 2 ? 62 : 74;
 }
 
-function getScheduleMinimumRowHeight(visibleCount: number) {
-  if (visibleCount <= 1) {
-    return 34;
+function getScheduleMinimumRowHeight(
+  visibleCount: number,
+  rowVariant: ScheduleRowVariant,
+  minComfortInset: number,
+) {
+  if (rowVariant === "full") {
+    return (visibleCount <= 2 ? 44 : 48) + minComfortInset * 2;
   }
 
-  return visibleCount <= 2 ? 56 : 50;
+  if (rowVariant === "compactIcon") {
+    return (visibleCount <= 2 ? 28 : 30) + minComfortInset * 2;
+  }
+
+  return 22 + minComfortInset * 2;
 }
 
 function getStopBoardLayout(stopCount: number, isStackedLayout: boolean) {
