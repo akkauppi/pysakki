@@ -22,7 +22,9 @@ import {
   type ViewportState,
 } from "./lib/urlState";
 import {
+  getVehicleMqttTopics,
   useVehicleStream,
+  type VehicleBounds,
   type VehicleSnapshot,
   type VehicleStreamStatus,
 } from "./lib/useVehicleStream";
@@ -52,6 +54,9 @@ export default function App() {
   const [styleError, setStyleError] = useState<string | null>(null);
   const [styleLoading, setStyleLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
+  const [vehicleBounds, setVehicleBounds] = useState<VehicleBounds>(() =>
+    getFallbackVehicleBounds(initialUrlState.viewport),
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [leaderLines, setLeaderLines] = useState<LeaderRibbon[]>([]);
   const [overlaySize, setOverlaySize] = useState({ width: 1, height: 1 });
@@ -70,7 +75,11 @@ export default function App() {
   const vehiclesRef = useRef<Map<string, VehicleSnapshot>>(new Map());
   const stopCardRefs = useRef(new Map<string, HTMLElement>());
 
-  const { vehicles, status: vehicleStreamStatus } = useVehicleStream();
+  const vehicleMqttTopics = useMemo(
+    () => getVehicleMqttTopics(vehicleBounds),
+    [vehicleBounds.north, vehicleBounds.south, vehicleBounds.east, vehicleBounds.west],
+  );
+  const { vehicles, status: vehicleStreamStatus } = useVehicleStream(vehicleMqttTopics);
   const digitransitApiKeyConfigured = Boolean(import.meta.env.VITE_DIGITRANSIT_API_KEY);
   const departureLimit = getDepartureLimit(initialUrlState.stopIds.length);
   const isStackedLayout = overlaySize.width < 768;
@@ -243,8 +252,9 @@ export default function App() {
         map.once("style.load", installMapOverlays);
         map.once("load", installMapOverlays);
 
-        map.on("moveend", () => {
+        const updateMapViewport = () => {
           const center = map.getCenter();
+          const bounds = map.getBounds();
           const nextViewport = {
             lat: round(center.lat, 5),
             lon: round(center.lng, 5),
@@ -258,6 +268,12 @@ export default function App() {
               ? current
               : nextViewport,
           );
+          setVehicleBounds({
+            north: round(bounds.getNorth(), 5),
+            south: round(bounds.getSouth(), 5),
+            east: round(bounds.getEast(), 5),
+            west: round(bounds.getWest(), 5),
+          });
 
           const nextUrl = serializeUrlState({
             viewport: nextViewport,
@@ -265,7 +281,10 @@ export default function App() {
           });
 
           window.history.replaceState({}, "", nextUrl);
-        });
+        };
+
+        updateMapViewport();
+        map.on("moveend", updateMapViewport);
 
         mapRef.current = map;
       } catch (error) {
@@ -924,6 +943,15 @@ function formatVehicleStreamStatus(status: VehicleStreamStatus) {
     default:
       return status;
   }
+}
+
+function getFallbackVehicleBounds(viewport: ViewportState): VehicleBounds {
+  return {
+    north: viewport.lat + 0.01,
+    south: viewport.lat - 0.01,
+    east: viewport.lon + 0.01,
+    west: viewport.lon - 0.01,
+  };
 }
 
 function formatClockTime(value: Date) {

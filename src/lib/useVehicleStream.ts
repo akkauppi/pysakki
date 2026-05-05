@@ -2,10 +2,18 @@ import { useEffect, useState } from "react";
 import mqtt, { type MqttClient } from "mqtt";
 
 const MQTT_URL = "wss://mqtt.hsl.fi:443/";
-const MQTT_TOPIC =
-  import.meta.env.VITE_HSL_MQTT_TOPIC ??
-  "/hfp/v2/journey/ongoing/vp/+/+/+/+/+/+/+/+/+/+/+/+/+";
+const MQTT_TOPIC_OVERRIDE = import.meta.env.VITE_HSL_MQTT_TOPIC as string | undefined;
+const MQTT_TOPIC_FALLBACK = "/hfp/v2/journey/ongoing/vp/+/+/+/+/+/+/+/+/+/+/+/+/+";
 const MQTT_SHUTDOWN_DELAY_MS = 1_000;
+const HFP_GEO_TOPIC_BUFFER_CELLS = 1;
+const HFP_GEO_TOPIC_PRECISION = 100;
+
+export type VehicleBounds = {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+};
 
 type VehiclePositionPayload = {
   VP?: {
@@ -42,19 +50,22 @@ let sharedClient: MqttClient | null = null;
 let sharedClientUsers = 0;
 let shutdownTimer: number | null = null;
 
-export function useVehicleStream() {
+export function useVehicleStream(topics: string[] = [MQTT_TOPIC_FALLBACK]) {
   const [vehicles, setVehicles] = useState<Map<string, VehicleSnapshot>>(new Map());
   const [status, setStatus] = useState<VehicleStreamStatus>("connecting");
+  const topicKey = topics.join("\n");
 
   useEffect(() => {
     const client = getSharedClient();
+    const subscribedTopics = topicKey.split("\n").filter(Boolean);
     sharedClientUsers += 1;
 
+    setVehicles(new Map());
     setStatus(client.connected ? "connected" : "connecting");
 
     const handleConnect = () => {
       setStatus("connected");
-      client.subscribe(MQTT_TOPIC);
+      client.subscribe(subscribedTopics);
     };
 
     const handleReconnect = () => {
@@ -80,7 +91,7 @@ export function useVehicleStream() {
         const lat = vp.lat;
         const lon = vp.long;
 
-        const topicParts = topic.split("/");
+        const topicParts = topic.split("/").filter(Boolean);
         const mode = mapVehicleMode(topicParts[5] ?? "");
         const operator = vp.oper ?? "na";
         const id = `${mode}:${operator}:${vp.veh}`;
@@ -89,14 +100,31 @@ export function useVehicleStream() {
         setVehicles((current) => {
           const next = new Map(current);
           const previous = next.get(id);
+          const heading = vp.hdg ?? previous?.heading ?? 0;
+
+          if (
+            previous &&
+            previous.lat === lat &&
+            previous.lon === lon &&
+            previous.heading === heading
+          ) {
+            next.set(id, {
+              ...previous,
+              label: vp.desi ?? String(vp.line ?? ""),
+              headsign: vp.route ?? "",
+              mode,
+            });
+            return next;
+          }
+
           next.set(id, {
             id,
             lat,
             lon,
-            heading: vp.hdg ?? 0,
+            heading,
             previousLat: previous?.lat ?? lat,
             previousLon: previous?.lon ?? lon,
-            previousHeading: previous?.heading ?? (vp.hdg ?? 0),
+            previousHeading: previous?.heading ?? heading,
             transitionStartedAt,
             label: vp.desi ?? String(vp.line ?? ""),
             headsign: vp.route ?? "",
@@ -128,10 +156,14 @@ export function useVehicleStream() {
     client.on("message", handleMessage);
 
     if (client.connected) {
-      client.subscribe(MQTT_TOPIC);
+      client.subscribe(subscribedTopics);
     }
 
     return () => {
+      if (client.connected) {
+        client.unsubscribe(subscribedTopics);
+      }
+
       client.off("connect", handleConnect);
       client.off("reconnect", handleReconnect);
       client.off("close", handleClose);
@@ -139,9 +171,49 @@ export function useVehicleStream() {
       client.off("message", handleMessage);
       releaseSharedClient();
     };
-  }, []);
+  }, [topicKey]);
 
   return { vehicles, status };
+}
+
+export function getVehicleMqttTopics(bounds: VehicleBounds) {
+  if (MQTT_TOPIC_OVERRIDE) {
+    return MQTT_TOPIC_OVERRIDE.split(",").map((topic) => topic.trim()).filter(Boolean);
+  }
+
+  return getHfpGeographicTopics(bounds);
+}
+
+function getHfpGeographicTopics(bounds: VehicleBounds) {
+  const topics = new Set<string>();
+
+  const southCell = Math.floor(bounds.south * HFP_GEO_TOPIC_PRECISION) - HFP_GEO_TOPIC_BUFFER_CELLS;
+  const northCell = Math.floor(bounds.north * HFP_GEO_TOPIC_PRECISION) + HFP_GEO_TOPIC_BUFFER_CELLS;
+  const westCell = Math.floor(bounds.west * HFP_GEO_TOPIC_PRECISION) - HFP_GEO_TOPIC_BUFFER_CELLS;
+  const eastCell = Math.floor(bounds.east * HFP_GEO_TOPIC_PRECISION) + HFP_GEO_TOPIC_BUFFER_CELLS;
+
+  for (let latCell = southCell; latCell <= northCell; latCell += 1) {
+    for (let lonCell = westCell; lonCell <= eastCell; lonCell += 1) {
+      topics.add(getHfpGeographicTopic(latCell, lonCell));
+    }
+  }
+
+  return Array.from(topics);
+}
+
+function getHfpGeographicTopic(latCell: number, lonCell: number) {
+  const latDegree = Math.floor(latCell / HFP_GEO_TOPIC_PRECISION);
+  const lonDegree = Math.floor(lonCell / HFP_GEO_TOPIC_PRECISION);
+  const latTenth = Math.floor(positiveModulo(latCell, HFP_GEO_TOPIC_PRECISION) / 10);
+  const lonTenth = Math.floor(positiveModulo(lonCell, HFP_GEO_TOPIC_PRECISION) / 10);
+  const latHundredth = positiveModulo(latCell, 10);
+  const lonHundredth = positiveModulo(lonCell, 10);
+
+  return `/hfp/v2/journey/ongoing/vp/+/+/+/+/+/+/+/+/+/${latDegree};${lonDegree}/${latTenth}${lonTenth}/${latHundredth}${lonHundredth}/#`;
+}
+
+function positiveModulo(value: number, divisor: number) {
+  return ((value % divisor) + divisor) % divisor;
 }
 
 function mapVehicleMode(mode: string): VehicleSnapshot["mode"] {
