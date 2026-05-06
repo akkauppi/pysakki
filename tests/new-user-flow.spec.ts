@@ -10,6 +10,20 @@ test("shows first-run setup when no URL or saved stops exist", async ({ page }) 
   await expect(page.getByTestId("edit-stops-panel")).toBeVisible();
 });
 
+test("keeps edit save action reachable on a short phone viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 640 });
+  await page.addInitScript(() => window.localStorage.clear());
+
+  await page.goto("/");
+  await page.getByTestId("setup-choose-map").click();
+
+  const saveButton = page.getByTestId("edit-save");
+  await expect(saveButton).toBeVisible();
+  const box = await saveButton.boundingBox();
+  expect(box).not.toBeNull();
+  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(640);
+});
+
 test("uses saved browser config when URL stops are absent", async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem(

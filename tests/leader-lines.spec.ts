@@ -23,6 +23,14 @@ for (const viewport of viewports) {
       await page.waitForTimeout(mapFitSettleMs);
       await expect(page.getByTestId("stop-card")).toHaveCount(stopCount);
 
+      const hasSplitStackedSchedule = viewport.width < 768 && viewport.height >= 600 && viewport.height >= viewport.width && stopCount >= 3;
+
+      if (hasSplitStackedSchedule) {
+        await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(1);
+      } else {
+        await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(0);
+      }
+
       await expect(page.getByTestId("leader-3d")).toHaveCount(stopCount);
       await expect(page.getByTestId("leader-shadow")).toHaveCount(0);
       await expect(page.getByTestId("leader-underside")).toHaveCount(0);
@@ -89,6 +97,36 @@ for (const viewport of viewports) {
         expect(isMonotonic(stopCaps.map((point) => point.y))).toBe(true);
       } else {
         expect(isMonotonic(stopCaps.map((point) => point.x))).toBe(true);
+      }
+
+      if (hasSplitStackedSchedule) {
+        const mapRect = await page.locator("main").evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            top: rect.top,
+            bottom: rect.bottom,
+          };
+        });
+        const cardRects = await page.getByTestId("stop-card").evaluateAll((cards) =>
+          cards.map((card) => {
+            const rect = card.getBoundingClientRect();
+            return {
+              top: rect.top,
+              bottom: rect.bottom,
+              width: rect.width,
+            };
+          }),
+        );
+
+        expect(cardRects[0].bottom).toBeLessThanOrEqual(mapRect.top + 1);
+        expect(cardRects[1].bottom).toBeLessThanOrEqual(mapRect.top + 1);
+        for (const rect of cardRects.slice(2)) {
+          expect(rect.top).toBeGreaterThanOrEqual(mapRect.bottom - 1);
+        }
+
+        if (stopCount === 3) {
+          expect(cardRects[2].width).toBeGreaterThan(cardRects[0].width * 1.5);
+        }
       }
 
       if (viewport.width >= 768) {
