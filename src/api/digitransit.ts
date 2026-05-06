@@ -1,4 +1,5 @@
 import { GraphQLClient, gql } from "graphql-request";
+import { filterBoardableDepartures } from "./departureFilter";
 
 const GRAPHQL_URL =
   import.meta.env.VITE_DIGITRANSIT_GRAPHQL_URL ??
@@ -29,11 +30,16 @@ const stopQuery = gql`
       lon
       vehicleMode
       stoptimesWithoutPatterns(numberOfDepartures: $numberOfDepartures) {
+        scheduledArrival
+        realtimeArrival
         scheduledDeparture
         realtimeDeparture
         serviceDay
         realtime
         headsign
+        pickupType
+        dropoffType
+        stopPositionInPattern
         trip {
           route {
             shortName
@@ -56,11 +62,16 @@ type StopQueryResult = {
     lon: number;
     vehicleMode: string | null;
     stoptimesWithoutPatterns: Array<{
+      scheduledArrival: number | null;
+      realtimeArrival: number | null;
       scheduledDeparture: number;
       realtimeDeparture: number;
       serviceDay: number;
       realtime: boolean;
       headsign: string | null;
+      pickupType: string | null;
+      dropoffType: string | null;
+      stopPositionInPattern: number | null;
       trip: {
         route: {
           shortName: string | null;
@@ -129,7 +140,7 @@ export async function fetchStopsWithDepartures(
         lat: response.stop.lat,
         lon: response.stop.lon,
         vehicleMode: response.stop.vehicleMode,
-        departures: response.stop.stoptimesWithoutPatterns.map((item) => ({
+        departures: filterBoardableDepartures(response.stop.stoptimesWithoutPatterns).map((item) => ({
           scheduledDeparture: item.scheduledDeparture,
           realtimeDeparture: item.realtimeDeparture,
           serviceDay: item.serviceDay,

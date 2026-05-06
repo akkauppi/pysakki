@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const stopIds = ["H0831", "H0446", "H0405", "H0430"];
+const mapFitSettleMs = 950;
 
 const viewports = [
   { width: 390, height: 844 },
@@ -19,18 +20,38 @@ for (const viewport of viewports) {
       await page.setViewportSize(viewport);
       await page.goto(`/?stops=${stopIds.slice(0, stopCount).join(",")}`);
       await page.waitForSelector('[data-testid="leader-3d"]');
+      await page.waitForTimeout(mapFitSettleMs);
       await expect(page.getByTestId("stop-card")).toHaveCount(stopCount);
 
       await expect(page.getByTestId("leader-3d")).toHaveCount(stopCount);
       await expect(page.getByTestId("leader-shadow")).toHaveCount(0);
       await expect(page.getByTestId("leader-underside")).toHaveCount(0);
+      await expect(page.getByTestId("leader-frost")).toHaveCount(stopCount);
       await expect(page.getByTestId("leader-ribbon")).toHaveCount(stopCount);
+      await expect(page.getByTestId("leader-glow")).toHaveCount(stopCount);
+      await expect(page.getByTestId("leader-soft-shadow")).toHaveCount(stopCount);
+      await expect(page.getByTestId("leader-inner-shadow")).toHaveCount(stopCount);
       await expect(page.getByTestId("leader-drop")).toHaveCount(0);
       await expect(page.getByTestId("leader-deck")).toHaveCount(0);
-      await expect(page.getByTestId("leader-highlight")).toHaveCount(0);
+      await expect(page.getByTestId("leader-highlight")).toHaveCount(stopCount);
       await expect(page.getByTestId("leader-stop-cap")).toHaveCount(stopCount);
       await expect(page.getByTestId("leader-card-join")).toHaveCount(0);
       await expect(page.getByTestId("leader-card-cap")).toHaveCount(0);
+
+      const frostedLayers = await page.getByTestId("leader-frost").evaluateAll((layers) =>
+        layers.map((layer) => {
+          const style = getComputedStyle(layer);
+          return {
+            clipPath: style.clipPath,
+            backdropFilter: style.backdropFilter || style.getPropertyValue("-webkit-backdrop-filter"),
+          };
+        }),
+      );
+
+      for (const layer of frostedLayers) {
+        expect(layer.clipPath).toContain("polygon");
+        expect(layer.backdropFilter).toContain("blur");
+      }
 
       const stopCaps = await page.getByTestId("leader-stop-cap").evaluateAll((circles) =>
         circles.map((circle) => {
