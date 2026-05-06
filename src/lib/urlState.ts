@@ -15,6 +15,11 @@ export const DEFAULT_STOP_IDS = ["H0831", "H0446"];
 
 export function parseUrlState(search: string) {
   const params = new URLSearchParams(search);
+  const hasLat = params.has("lat");
+  const hasLon = params.has("lon");
+  const hasZoom = params.has("zoom");
+  const hasViewport = hasLat || hasLon || hasZoom;
+  const hasStops = params.has("stops");
 
   const lat = parseNumber(params.get("lat"), DEFAULT_VIEWPORT.lat);
   const lon = parseNumber(params.get("lon"), DEFAULT_VIEWPORT.lon);
@@ -32,7 +37,11 @@ export function parseUrlState(search: string) {
       lon,
       zoom,
     },
-    stopIds: stopIds.length > 0 ? stopIds : DEFAULT_STOP_IDS.slice(0, MAX_STOP_COUNT),
+    stopIds,
+    explicit: {
+      hasStops,
+      hasViewport,
+    },
   };
 }
 

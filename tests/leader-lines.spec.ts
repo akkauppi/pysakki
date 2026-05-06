@@ -86,6 +86,12 @@ for (const viewport of viewports) {
       expect(uniqueStopCaps.size).toBe(stopCount);
 
       if (viewport.width >= 768) {
+        expect(isMonotonic(stopCaps.map((point) => point.y))).toBe(true);
+      } else {
+        expect(isMonotonic(stopCaps.map((point) => point.x))).toBe(true);
+      }
+
+      if (viewport.width >= 768) {
         const cards = await page.getByTestId("stop-card").evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();
@@ -321,4 +327,14 @@ function countVariantTransitions(values: Array<string | null>, from: string, to:
   }
 
   return transitions;
+}
+
+function isMonotonic(values: number[]) {
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index] + 1 < values[index - 1]) {
+      return false;
+    }
+  }
+
+  return true;
 }

@@ -52,6 +52,37 @@ const stopQuery = gql`
   }
 `;
 
+const nearbyTramStopsQuery = gql`
+  query NearbyTramStops($lat: Float!, $lon: Float!, $maxDistance: Int!, $maxResults: Int!) {
+    nearest(
+      lat: $lat
+      lon: $lon
+      maxDistance: $maxDistance
+      maxResults: $maxResults
+      filterByPlaceTypes: [STOP]
+      filterByModes: [TRAM]
+    ) {
+      edges {
+        node {
+          distance
+          place {
+            __typename
+            ... on Stop {
+              gtfsId
+              name
+              code
+              desc
+              lat
+              lon
+              vehicleMode
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 type StopQueryResult = {
   stop: {
     gtfsId: string;
@@ -83,6 +114,39 @@ type StopQueryResult = {
   } | null;
 };
 
+type NearbyTramStopsQueryResult = {
+  nearest: {
+    edges: Array<{
+      node: {
+        distance: number | null;
+        place:
+          | {
+              __typename: "Stop";
+              gtfsId: string;
+              name: string;
+              code: string | null;
+              desc: string | null;
+              lat: number;
+              lon: number;
+              vehicleMode: string | null;
+            }
+          | {
+              __typename: string;
+            }
+          | null;
+      };
+    }>;
+  } | null;
+};
+
+type NearbyPlace = NonNullable<
+  NonNullable<NearbyTramStopsQueryResult["nearest"]>["edges"][number]["node"]["place"]
+>;
+type NearbyStopPlace = Extract<
+  NearbyPlace,
+  { __typename: "Stop" }
+>;
+
 type GeocodingStopSearchResult = {
   features: Array<{
     properties: {
@@ -96,6 +160,16 @@ type GeocodingStopSearchResult = {
   }>;
 };
 
+export type NearbyStopCandidate = {
+  gtfsId: string;
+  name: string;
+  code: string | null;
+  desc: string | null;
+  lat: number;
+  lon: number;
+  distance: number;
+};
+
 export type StopWithDepartures = {
   gtfsId: string;
   name: string;
@@ -104,6 +178,7 @@ export type StopWithDepartures = {
   lat: number;
   lon: number;
   vehicleMode: string | null;
+  directionHint: string | null;
   departures: Array<{
     scheduledDeparture: number;
     realtimeDeparture: number;
@@ -115,6 +190,32 @@ export type StopWithDepartures = {
     routeMode: string;
   }>;
 };
+
+export async function fetchNearbyTramStops({
+  lat,
+  lon,
+  maxDistance = 1800,
+  maxResults = 16,
+  retryWithWiderRadius = true,
+}: {
+  lat: number;
+  lon: number;
+  maxDistance?: number;
+  maxResults?: number;
+  retryWithWiderRadius?: boolean;
+}): Promise<NearbyStopCandidate[]> {
+  const candidates = await requestNearbyTramStops({ lat, lon, maxDistance, maxResults });
+  if (!retryWithWiderRadius || candidates.length >= 4 || maxDistance >= 3500) {
+    return candidates.slice(0, 4);
+  }
+
+  return requestNearbyTramStops({
+    lat,
+    lon,
+    maxDistance: 3500,
+    maxResults: 24,
+  }).then((retryCandidates) => retryCandidates.slice(0, 4));
+}
 
 export async function fetchStopsWithDepartures(
   stopIds: string[],
@@ -132,6 +233,8 @@ export async function fetchStopsWithDepartures(
         throw new Error(`Stop not found: ${id}`);
       }
 
+      const boardableDepartures = filterBoardableDepartures(response.stop.stoptimesWithoutPatterns);
+
       return {
         gtfsId: response.stop.gtfsId,
         name: response.stop.name,
@@ -140,7 +243,8 @@ export async function fetchStopsWithDepartures(
         lat: response.stop.lat,
         lon: response.stop.lon,
         vehicleMode: response.stop.vehicleMode,
-        departures: filterBoardableDepartures(response.stop.stoptimesWithoutPatterns).map((item) => ({
+        directionHint: getDominantHeadsign(boardableDepartures),
+        departures: boardableDepartures.map((item) => ({
           scheduledDeparture: item.scheduledDeparture,
           realtimeDeparture: item.realtimeDeparture,
           serviceDay: item.serviceDay,
@@ -155,6 +259,79 @@ export async function fetchStopsWithDepartures(
   );
 
   return results;
+}
+
+async function requestNearbyTramStops({
+  lat,
+  lon,
+  maxDistance,
+  maxResults,
+}: {
+  lat: number;
+  lon: number;
+  maxDistance: number;
+  maxResults: number;
+}) {
+  const response = await client.request<NearbyTramStopsQueryResult>(nearbyTramStopsQuery, {
+    lat,
+    lon,
+    maxDistance,
+    maxResults,
+  });
+  const seen = new Set<string>();
+
+  return (response.nearest?.edges ?? [])
+    .flatMap((edge): NearbyStopCandidate[] => {
+      const place = edge.node.place;
+      if (!isNearbyStopPlace(place) || place.vehicleMode !== "TRAM") {
+        return [];
+      }
+
+      if (seen.has(place.gtfsId)) {
+        return [];
+      }
+      seen.add(place.gtfsId);
+
+      return [
+        {
+          gtfsId: place.gtfsId,
+          name: place.name,
+          code: place.code,
+          desc: place.desc,
+          lat: place.lat,
+          lon: place.lon,
+          distance: edge.node.distance ?? Number.POSITIVE_INFINITY,
+        },
+      ];
+    })
+    .sort((a, b) => a.distance - b.distance);
+}
+
+function isNearbyStopPlace(place: NearbyPlace | null): place is NearbyStopPlace {
+  return Boolean(place && place.__typename === "Stop");
+}
+
+function getDominantHeadsign(
+  stoptimes: Array<{
+    headsign: string | null;
+    trip: {
+      route: {
+        longName: string | null;
+      };
+    } | null;
+  }>,
+) {
+  const counts = new Map<string, number>();
+  for (const stoptime of stoptimes) {
+    const headsign = stoptime.headsign ?? stoptime.trip?.route.longName;
+    if (!headsign) {
+      continue;
+    }
+
+    counts.set(headsign, (counts.get(headsign) ?? 0) + 1);
+  }
+
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
 async function resolveStopId(stopRef: string): Promise<string> {

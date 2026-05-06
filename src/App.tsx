@@ -4,23 +4,39 @@ import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibr
 import {
   AlertTriangle,
   Bus,
+  Check,
+  Copy,
+  Crosshair,
+  LocateFixed,
   LoaderCircle,
   MapPinned,
   Menu,
+  Plus,
+  RotateCcw,
   TrainFront,
   TramFront,
+  Trash2,
   X,
 } from "lucide-react";
-import { fetchStopsWithDepartures, type StopWithDepartures } from "./api/digitransit";
+import {
+  fetchNearbyTramStops,
+  fetchStopsWithDepartures,
+  type NearbyStopCandidate,
+  type StopWithDepartures,
+} from "./api/digitransit";
 import { cn } from "./lib/cn";
 import { loadHslStyle } from "./lib/hslStyle";
 import { formatDepartureTime, formatRelativeMinutes } from "./lib/time";
 import {
   MAX_STOP_COUNT,
-  parseUrlState,
   serializeUrlState,
   type ViewportState,
 } from "./lib/urlState";
+import {
+  clearUserConfig,
+  resolveInitialUserConfig,
+  saveUserConfig,
+} from "./lib/userConfig";
 import {
   getVehicleMqttTopics,
   useVehicleStream,
@@ -37,6 +53,8 @@ const HSL_LABEL_FONT = ["Gotham Rounded Medium"];
 const DEPARTURE_EXPIRY_GRACE_MS = 45_000;
 const STOP_REFRESH_INTERVAL_MS = 60_000;
 const STOP_REFRESH_MIN_INTERVAL_MS = 15_000;
+const GEOLOCATION_TIMEOUT_MS = 10_000;
+const LOCATION_ZOOM = 15.8;
 type LeaderRibbon = {
   id: string;
   svgId: string;
@@ -56,10 +74,16 @@ type ScreenPoint = {
 };
 
 type Departure = StopWithDepartures["departures"][number];
+type EditBaseline = {
+  stopIds: string[];
+  viewport: ViewportState;
+};
+type AsyncUiState = "idle" | "loading" | "success" | "error";
 
 export default function App() {
-  const initialUrlState = useMemo(() => parseUrlState(window.location.search), []);
-  const [viewport, setViewport] = useState<ViewportState>(initialUrlState.viewport);
+  const initialUserConfig = useMemo(() => resolveInitialUserConfig(window.location.search), []);
+  const [viewport, setViewport] = useState<ViewportState>(initialUserConfig.viewport);
+  const [stopIds, setStopIds] = useState<string[]>(initialUserConfig.stopIds);
   const [stops, setStops] = useState<StopWithDepartures[]>([]);
   const [stopsLoading, setStopsLoading] = useState(false);
   const [stopsError, setStopsError] = useState<string | null>(null);
@@ -67,9 +91,16 @@ export default function App() {
   const [styleLoading, setStyleLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
   const [vehicleBounds, setVehicleBounds] = useState<VehicleBounds>(() =>
-    getFallbackVehicleBounds(initialUrlState.viewport),
+    getFallbackVehicleBounds(initialUserConfig.viewport),
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [setupMode, setSetupMode] = useState(initialUserConfig.stopIds.length === 0);
+  const [editMode, setEditMode] = useState(false);
+  const [nearbyStops, setNearbyStops] = useState<NearbyStopCandidate[]>([]);
+  const [locationStatus, setLocationStatus] = useState<AsyncUiState>("idle");
+  const [editStatus, setEditStatus] = useState<string | null>(null);
+  const [shareStatus, setShareStatus] = useState<"idle" | "copied" | "manual">("idle");
+  const [arrangedStopIds, setArrangedStopIds] = useState<string[]>(initialUserConfig.stopIds);
   const [leaderLines, setLeaderLines] = useState<LeaderRibbon[]>([]);
   const [overlaySize, setOverlaySize] = useState({ width: 1, height: 1 });
   const [now, setNow] = useState(() => new Date());
@@ -80,8 +111,16 @@ export default function App() {
   const mapRef = useRef<MapLibreMap | null>(null);
   const vehicleSourceRef = useRef<GeoJSONSource | null>(null);
   const stopSourceRef = useRef<GeoJSONSource | null>(null);
-  const initialViewportRef = useRef(initialUrlState.viewport);
-  const stopIdsRef = useRef(initialUrlState.stopIds);
+  const initialViewportRef = useRef(initialUserConfig.viewport);
+  const stopIdsRef = useRef(initialUserConfig.stopIds);
+  const stopsRef = useRef<StopWithDepartures[]>([]);
+  const viewportRef = useRef(initialUserConfig.viewport);
+  const setupModeRef = useRef(setupMode);
+  const editModeRef = useRef(editMode);
+  const editBaselineRef = useRef<EditBaseline>({
+    stopIds: initialUserConfig.stopIds,
+    viewport: initialUserConfig.viewport,
+  });
   const vehicleFrameRef = useRef<number | null>(null);
   const leaderLineFrameRef = useRef<number | null>(null);
   const vehiclesRef = useRef<Map<string, VehicleSnapshot>>(new Map());
@@ -95,13 +134,18 @@ export default function App() {
   );
   const { vehicles, status: vehicleStreamStatus } = useVehicleStream(vehicleMqttTopics);
   const digitransitApiKeyConfigured = Boolean(import.meta.env.VITE_DIGITRANSIT_API_KEY);
-  const departureLimit = getDepartureLimit(initialUrlState.stopIds.length);
+  const departureLimit = getDepartureLimit(stopIds.length);
   const activeStops = useMemo(() => filterStopsWithActiveDepartures(stops, now), [stops, now]);
   const isStackedLayout = overlaySize.width < 768;
-  const stopBoardLayout = getStopBoardLayout(stops.length, isStackedLayout);
+  const displayStops = useMemo(
+    () => orderStopsByIds(activeStops, arrangedStopIds),
+    [activeStops, arrangedStopIds],
+  );
+  const duplicateStopNames = useMemo(() => getDuplicateStopNames(displayStops), [displayStops]);
+  const stopBoardLayout = getStopBoardLayout(displayStops.length, isStackedLayout);
   const maxActiveDepartureCount = getMaxDepartureCount(activeStops);
   const scheduleFit = getScheduleFit(
-    stops.length,
+    displayStops.length,
     Math.min(departureLimit, maxActiveDepartureCount),
     isStackedLayout,
     overlaySize,
@@ -113,14 +157,39 @@ export default function App() {
   const showScheduledTime = scheduleFit.rowVariant === "full";
   const showModeIcon = scheduleFit.rowVariant !== "compact";
   const ultraCompactSchedule = scheduleFit.rowVariant === "compact";
-  const denseScheduleHeader = scheduleFit.rowVariant !== "full" || stops.length >= 4;
+  const denseScheduleHeader = scheduleFit.rowVariant !== "full" || displayStops.length >= 4;
   const emptySchedule = visibleDepartureCount === 0;
   const scheduleScale = scheduleFit.scale;
   const scheduleScaleStyle = getScheduleScaleStyle(scheduleFit, compactSchedule);
+  const shareUrl = getShareUrl(viewport, stopIds);
 
   useEffect(() => {
     vehiclesRef.current = vehicles;
   }, [vehicles]);
+
+  useEffect(() => {
+    stopIdsRef.current = stopIds;
+  }, [stopIds]);
+
+  useEffect(() => {
+    stopsRef.current = stops;
+  }, [stops]);
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
+
+  useEffect(() => {
+    setArrangedStopIds((current) => mergeArrangedStopIds(current, stops));
+  }, [stops]);
+
+  useEffect(() => {
+    setupModeRef.current = setupMode;
+  }, [setupMode]);
+
+  useEffect(() => {
+    editModeRef.current = editMode;
+  }, [editMode]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -310,7 +379,9 @@ export default function App() {
             stopIds: stopIdsRef.current,
           });
 
-          window.history.replaceState({}, "", nextUrl);
+          if (!setupModeRef.current && !editModeRef.current && stopIdsRef.current.length > 0) {
+            window.history.replaceState({}, "", nextUrl);
+          }
         };
 
         updateMapViewport();
@@ -348,8 +419,9 @@ export default function App() {
     let cancelled = false;
     let intervalId: number | null = null;
 
-    if (initialUrlState.stopIds.length === 0) {
+    if (stopIds.length === 0) {
       setStops([]);
+      setStopsLoading(false);
       return;
     }
 
@@ -360,7 +432,7 @@ export default function App() {
       setStopsError(null);
       lastStopRefreshAtRef.current = Date.now();
 
-      fetchStopsWithDepartures(initialUrlState.stopIds, departureLimit)
+      fetchStopsWithDepartures(stopIds, departureLimit)
         .then((result) => {
           if (!cancelled) {
             setStops(result);
@@ -389,10 +461,10 @@ export default function App() {
         window.clearInterval(intervalId);
       }
     };
-  }, [departureLimit, initialUrlState.stopIds]);
+  }, [departureLimit, stopIds]);
 
   useEffect(() => {
-    if (initialUrlState.stopIds.length === 0 || stops.length === 0) {
+    if (stopIds.length === 0 || stops.length === 0) {
       return;
     }
 
@@ -408,7 +480,7 @@ export default function App() {
     let cancelled = false;
     lastStopRefreshAtRef.current = Date.now();
 
-    fetchStopsWithDepartures(initialUrlState.stopIds, departureLimit)
+    fetchStopsWithDepartures(stopIds, departureLimit)
       .then((result) => {
         if (!cancelled) {
           setStops(result);
@@ -423,7 +495,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeStops, departureLimit, initialUrlState.stopIds, stops.length, visibleDepartureCount]);
+  }, [activeStops, departureLimit, stopIds, stops.length, visibleDepartureCount]);
 
   useEffect(() => {
     if (!mapReady || !stopSourceRef.current) {
@@ -432,7 +504,7 @@ export default function App() {
 
     const data: FeatureCollection<Point> = {
       type: "FeatureCollection",
-      features: stops.map((stop, index) => ({
+      features: displayStops.map((stop, index) => ({
         type: "Feature",
         geometry: {
           type: "Point",
@@ -449,7 +521,7 @@ export default function App() {
 
     stopSourceRef.current.setData(data);
 
-    if (stops.length > 0 && mapRef.current) {
+    if (stops.length > 0 && mapRef.current && !setupMode && !editMode) {
       const bounds = new maplibregl.LngLatBounds(
         [stops[0].lon, stops[0].lat],
         [stops[0].lon, stops[0].lat],
@@ -465,7 +537,7 @@ export default function App() {
         duration: 900,
       });
     }
-  }, [mapReady, stops]);
+  }, [displayStops, editMode, mapReady, setupMode, stops]);
 
   useEffect(() => {
     if (!mapReady || !vehicleSourceRef.current) {
@@ -488,7 +560,7 @@ export default function App() {
   }, [mapReady]);
 
   useEffect(() => {
-    if (!mapReady || stops.length === 0 || !rootRef.current || !mapShellRef.current || !mapRef.current) {
+    if (!mapReady || displayStops.length === 0 || !rootRef.current || !mapShellRef.current || !mapRef.current) {
       setLeaderLines([]);
       return;
     }
@@ -509,12 +581,15 @@ export default function App() {
           return;
         }
 
+        const mapIsBelowBoard = mapRect.top >= rootRect.top + rootRect.height * 0.45;
+        setArrangedStopIds((current) => getArrangedStopIds(stopsRef.current, map, mapIsBelowBoard, current));
+
         setOverlaySize({
           width: Math.max(1, Math.ceil(rootRect.width)),
           height: Math.max(1, Math.ceil(rootRect.height)),
         });
 
-        const nextLines: LeaderRibbon[] = stops.flatMap((stop, index) => {
+        const nextLines: LeaderRibbon[] = displayStops.flatMap((stop, index) => {
           const leaderId = getLeaderId(stop, index);
           const card = stopCardRefs.current.get(leaderId);
           if (!card) {
@@ -607,7 +682,218 @@ export default function App() {
         leaderLineFrameRef.current = null;
       }
     };
-  }, [mapReady, stops]);
+  }, [displayStops, mapReady]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !editMode) {
+      return;
+    }
+
+    const map = mapRef.current;
+    const addStopFromMapClick = (event: maplibregl.MapMouseEvent) => {
+      setEditStatus("Looking for nearby tram stops...");
+      fetchNearbyTramStops({
+        lat: event.lngLat.lat,
+        lon: event.lngLat.lng,
+        maxDistance: 450,
+        maxResults: 8,
+        retryWithWiderRadius: false,
+      })
+        .then((candidates) => {
+          setNearbyStops(candidates);
+          const nextCandidate = candidates.find((candidate) => !stopIdsRef.current.includes(candidate.gtfsId));
+          if (!nextCandidate) {
+            setEditStatus(candidates.length > 0 ? "Those nearby tram stops are already selected." : "No tram stop found at that point.");
+            return;
+          }
+
+          setStopIds((current) => addStopId(current, nextCandidate.gtfsId));
+          setEditStatus(`${formatStopLabel(nextCandidate)} added.`);
+        })
+        .catch((error: unknown) => {
+          setEditStatus(error instanceof Error ? error.message : "Nearby stop lookup failed.");
+        });
+    };
+
+    map.on("click", addStopFromMapClick);
+
+    return () => {
+      map.off("click", addStopFromMapClick);
+    };
+  }, [editMode, mapReady]);
+
+  const beginEditMode = () => {
+    editBaselineRef.current = {
+      stopIds,
+      viewport,
+    };
+    setSetupMode(false);
+    setEditMode(true);
+    setMenuOpen(false);
+    setEditStatus("Pan the map, tap a tram stop area, or use nearby suggestions.");
+    setShareStatus("idle");
+  };
+
+  const beginManualSetup = () => {
+    editBaselineRef.current = {
+      stopIds: [],
+      viewport,
+    };
+    setSetupMode(false);
+    setEditMode(true);
+    setEditStatus("Pan the map and tap near tram stops to add them.");
+    setShareStatus("idle");
+  };
+
+  const useBrowserLocation = async () => {
+    setLocationStatus("loading");
+    setEditStatus("Waiting for location permission...");
+    setShareStatus("idle");
+
+    try {
+      const location = await getBrowserLocation();
+      const nextViewport = {
+        lat: round(location.lat, 5),
+        lon: round(location.lon, 5),
+        zoom: LOCATION_ZOOM,
+      };
+      setViewport(nextViewport);
+      mapRef.current?.easeTo({
+        center: [nextViewport.lon, nextViewport.lat],
+        zoom: nextViewport.zoom,
+        duration: 700,
+      });
+
+      const candidates = await fetchNearbyTramStops({
+        lat: nextViewport.lat,
+        lon: nextViewport.lon,
+      });
+
+      setNearbyStops(candidates);
+      setStopIds(candidates.map((candidate) => candidate.gtfsId).slice(0, MAX_STOP_COUNT));
+      setSetupMode(false);
+      setEditMode(true);
+      setLocationStatus("success");
+      setEditStatus(
+        candidates.length > 0
+          ? "Nearest tram stops selected. Review and press Done to save."
+          : "No nearby tram stops found. Pan the map and tap near stops to add them.",
+      );
+    } catch (error) {
+      setLocationStatus("error");
+      setSetupMode(false);
+      setEditMode(true);
+      setEditStatus(error instanceof Error ? error.message : "Location unavailable. Choose stops manually.");
+    }
+  };
+
+  const refreshNearbyStops = async () => {
+    const center = mapRef.current?.getCenter();
+    const nextViewport = center
+      ? {
+          lat: round(center.lat, 5),
+          lon: round(center.lng, 5),
+          zoom: round(mapRef.current?.getZoom() ?? viewport.zoom, 2),
+        }
+      : viewport;
+
+    setEditStatus("Refreshing nearby tram stops...");
+    setShareStatus("idle");
+
+    try {
+      const candidates = await fetchNearbyTramStops({
+        lat: nextViewport.lat,
+        lon: nextViewport.lon,
+      });
+      setNearbyStops(candidates);
+      setEditStatus(candidates.length > 0 ? "Nearby tram stops refreshed." : "No nearby tram stops found.");
+    } catch (error) {
+      setEditStatus(error instanceof Error ? error.message : "Nearby stop lookup failed.");
+    }
+  };
+
+  const addNearbyStop = (candidate: NearbyStopCandidate) => {
+    setStopIds((current) => addStopId(current, candidate.gtfsId));
+    setEditStatus(`${formatStopLabel(candidate)} selected.`);
+    setShareStatus("idle");
+  };
+
+  const removeSelectedStop = (stopId: string) => {
+    setStopIds((current) => current.filter((currentStopId) => currentStopId !== stopId));
+    setEditStatus("Stop removed.");
+    setShareStatus("idle");
+  };
+
+  const saveEdits = () => {
+    saveUserConfig({
+      stopIds,
+      viewport,
+    });
+    const nextUrl = serializeUrlState({ viewport, stopIds });
+    window.history.replaceState({}, "", nextUrl);
+    editBaselineRef.current = {
+      stopIds,
+      viewport,
+    };
+    setSetupMode(false);
+    setEditMode(false);
+    setEditStatus(null);
+    setShareStatus("idle");
+  };
+
+  const cancelEdits = () => {
+    const baseline = editBaselineRef.current;
+    setStopIds(baseline.stopIds);
+    setViewport(baseline.viewport);
+    mapRef.current?.easeTo({
+      center: [baseline.viewport.lon, baseline.viewport.lat],
+      zoom: baseline.viewport.zoom,
+      duration: 500,
+    });
+    setEditMode(false);
+    setSetupMode(baseline.stopIds.length === 0);
+    setEditStatus(null);
+    setShareStatus("idle");
+  };
+
+  const copyShareUrl = async () => {
+    try {
+      if (!navigator.clipboard) {
+        setShareStatus("manual");
+        return;
+      }
+
+      await navigator.clipboard.writeText(shareUrl);
+      setShareStatus("copied");
+    } catch {
+      setShareStatus("manual");
+    }
+  };
+
+  const resetChoices = () => {
+    clearUserConfig();
+    stopIdsRef.current = [];
+    setupModeRef.current = true;
+    editModeRef.current = false;
+    setStopIds([]);
+    setStops([]);
+    setNearbyStops([]);
+    setArrangedStopIds([]);
+    setSetupMode(true);
+    setEditMode(false);
+    setMenuOpen(false);
+    setEditStatus(null);
+    setShareStatus("idle");
+    setLocationStatus("idle");
+    const nextViewport = initialViewportRef.current;
+    setViewport(nextViewport);
+    window.history.replaceState({}, "", window.location.pathname);
+    mapRef.current?.easeTo({
+      center: [nextViewport.lon, nextViewport.lat],
+      zoom: nextViewport.zoom,
+      duration: 500,
+    });
+  };
 
   return (
     <div ref={rootRef} className="relative h-[100dvh] overflow-hidden bg-[#050816] text-slate-50">
@@ -618,9 +904,20 @@ export default function App() {
           <div className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent md:block" />
           <div className="flex h-full min-h-0 flex-col p-4 sm:p-5">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.28em] text-emerald-200">
-                <MapPinned className="h-3.5 w-3.5" />
-                <span className="h-2 w-2 rounded-full bg-emerald-300" />
+              <div className="inline-flex items-center overflow-hidden rounded-full border border-emerald-300/25 bg-emerald-400/10 text-[10px] font-medium uppercase tracking-[0.24em] text-emerald-200">
+                <div className="inline-flex items-center gap-2 px-3 py-1.5">
+                  <MapPinned className="h-3.5 w-3.5" />
+                  <span className={cn("h-2 w-2 rounded-full", vehicleStreamStatus === "error" ? "bg-amber-300" : "bg-emerald-300")} />
+                  <span>{vehicleStreamStatus === "connected" ? "Online" : vehicleStreamStatus}</span>
+                </div>
+                <button
+                  type="button"
+                  aria-label={menuOpen ? "Close menu" : "Open menu"}
+                  onClick={() => setMenuOpen((current) => !current)}
+                  className="inline-flex h-8 w-8 items-center justify-center border-l border-emerald-100/10 bg-white/[0.04] text-emerald-100 transition hover:bg-white/10"
+                >
+                  {menuOpen ? <X className="h-3.5 w-3.5" /> : <Menu className="h-3.5 w-3.5" />}
+                </button>
               </div>
 
               <div className="text-right">
@@ -652,16 +949,36 @@ export default function App() {
               </span>
             </div>
 
-            {initialUrlState.stopIds.length === 0 ? (
-              <div className="flex min-h-0 flex-1 items-center justify-center rounded-[1.6rem] border border-dashed border-white/15 bg-white/5 p-6 text-center text-sm leading-6 text-slate-300">
-                Add stop IDs in the URL, for example <code className="font-mono">?stops=HSL:1040129</code>.
-              </div>
+            {setupMode ? (
+              <FirstRunPanel
+                locationStatus={locationStatus}
+                onUseLocation={useBrowserLocation}
+                onChooseOnMap={beginManualSetup}
+              />
+            ) : editMode ? (
+              <EditStopsPanel
+                selectedStopIds={stopIds}
+                selectedStops={stops}
+                nearbyStops={nearbyStops}
+                status={editStatus}
+                shareStatus={shareStatus}
+                shareUrl={shareUrl}
+                locationStatus={locationStatus}
+                onUseLocation={useBrowserLocation}
+                onRefreshNearby={refreshNearbyStops}
+                onAddStop={addNearbyStop}
+                onRemoveStop={removeSelectedStop}
+                onSave={saveEdits}
+                onCancel={cancelEdits}
+                onCopyLink={copyShareUrl}
+                onReset={resetChoices}
+              />
             ) : (
               <div
                 className="grid min-h-0 flex-1 gap-3"
                 style={stopBoardLayout}
               >
-                {activeStops.map((stop, index) => (
+                {displayStops.map((stop, index) => (
                   <section
                     key={getLeaderId(stop, index)}
                     data-testid="stop-card"
@@ -690,6 +1007,14 @@ export default function App() {
                             <div className={cn("truncate font-semibold text-white", emptySchedule ? "text-[clamp(0.62rem,2.4vw,0.78rem)] leading-none" : denseScheduleHeader ? "text-[clamp(0.76rem,2.4vw,0.95rem)] leading-tight" : ultraCompactSchedule ? "mt-0.5 text-[clamp(0.72rem,2.8vw,0.9rem)] leading-none" : compactSchedule ? "mt-1 text-[clamp(0.86rem,2.6vw,1.05rem)] leading-tight" : "mt-1 text-[clamp(1rem,1.35vw,1.35rem)]")}>
                               {stop.name}
                             </div>
+                            {duplicateStopNames.has(stop.name) && !denseScheduleHeader && !emptySchedule ? (
+                              <div
+                                data-testid="stop-direction-hint"
+                                className={cn("truncate text-cyan-100/85", ultraCompactSchedule || denseScheduleHeader ? "mt-0.5 text-[9px] leading-tight" : "mt-1 text-xs leading-4")}
+                              >
+                                {[stop.code, stop.directionHint ? `toward ${stop.directionHint}` : null].filter(Boolean).join(" · ")}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                         {stop.desc && !compactSchedule ? (
@@ -897,17 +1222,8 @@ export default function App() {
         ))}
       </svg>
 
-      <button
-        type="button"
-        aria-label={menuOpen ? "Close menu" : "Open menu"}
-        onClick={() => setMenuOpen((current) => !current)}
-        className="absolute right-4 top-4 z-30 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-slate-950/35 text-slate-200 opacity-25 backdrop-blur-sm transition hover:opacity-80 focus:opacity-90"
-      >
-        {menuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-      </button>
-
       {menuOpen ? (
-        <div className="absolute right-4 top-16 z-30 w-[min(24rem,calc(100vw-2rem))] rounded-[1.6rem] border border-white/10 bg-slate-950/92 p-4 text-sm text-slate-200 shadow-2xl backdrop-blur-xl">
+        <div className="absolute left-4 top-[4.75rem] z-30 w-[min(24rem,calc(100vw-2rem))] rounded-[1.6rem] border border-white/10 bg-slate-950/92 p-4 text-sm text-slate-200 shadow-2xl backdrop-blur-xl md:left-5 md:top-[5.25rem]">
           <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
             Screen details
           </div>
@@ -921,14 +1237,52 @@ export default function App() {
             />
             <InfoRow
               label="Stops"
-              value={initialUrlState.stopIds.length > 0 ? initialUrlState.stopIds.join(", ") : "None"}
+              value={stopIds.length > 0 ? stopIds.join(", ") : "None"}
             />
             <InfoRow
               label="URL"
-              value={serializeUrlState({ viewport, stopIds: initialUrlState.stopIds })}
+              value={shareUrl}
               multiline
             />
           </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={beginEditMode}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-200/20 bg-cyan-300/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-300/16"
+            >
+              <MapPinned className="h-4 w-4" />
+              Edit stops
+            </button>
+            <button
+              type="button"
+              onClick={copyShareUrl}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
+            >
+              {shareStatus === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {shareStatus === "copied" ? "Copied" : "Copy link"}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            data-testid="reset-choices"
+            onClick={resetChoices}
+            className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-amber-200/20 bg-amber-300/10 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/16"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Reset choices
+          </button>
+
+          {shareStatus === "manual" ? (
+            <input
+              readOnly
+              value={shareUrl}
+              className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-200"
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          ) : null}
 
           {!digitransitApiKeyConfigured ? (
             <Notice className="mt-4 border-amber-300/30 bg-amber-400/10 text-amber-50">
@@ -980,6 +1334,250 @@ function Notice({
   className?: string;
 }) {
   return <div className={cn("flex gap-3 rounded-3xl border p-4 text-sm leading-6", className)}>{children}</div>;
+}
+
+function FirstRunPanel({
+  locationStatus,
+  onUseLocation,
+  onChooseOnMap,
+}: {
+  locationStatus: AsyncUiState;
+  onUseLocation: () => void;
+  onChooseOnMap: () => void;
+}) {
+  const locating = locationStatus === "loading";
+
+  return (
+    <div
+      data-testid="first-run-panel"
+      className="flex min-h-0 flex-1 flex-col justify-center rounded-[1.6rem] border border-cyan-200/15 bg-white/[0.04] p-4 text-sm text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] sm:p-5"
+    >
+      <div className="mb-4">
+        <div className="text-lg font-semibold text-white">Set up nearby tram stops</div>
+        <div className="mt-2 max-w-[30rem] text-sm leading-6 text-slate-300">
+          Use your location to select nearby tram stops, or choose stops from the map.
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        <button
+          type="button"
+          data-testid="setup-use-location"
+          onClick={onUseLocation}
+          disabled={locating}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-200/25 bg-cyan-300/12 px-4 py-3 font-medium text-cyan-50 transition hover:bg-cyan-300/18 disabled:cursor-wait disabled:opacity-70"
+        >
+          {locating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <LocateFixed className="h-4 w-4" />}
+          {locating ? "Finding location" : "Use location"}
+        </button>
+        <button
+          type="button"
+          data-testid="setup-choose-map"
+          onClick={onChooseOnMap}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-medium text-slate-100 transition hover:bg-white/10"
+        >
+          <MapPinned className="h-4 w-4" />
+          Choose on map
+        </button>
+      </div>
+
+      {locationStatus === "error" ? (
+        <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-50">
+          Location was unavailable. You can still choose stops from the map.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EditStopsPanel({
+  selectedStopIds,
+  selectedStops,
+  nearbyStops,
+  status,
+  shareStatus,
+  shareUrl,
+  locationStatus,
+  onUseLocation,
+  onRefreshNearby,
+  onAddStop,
+  onRemoveStop,
+  onSave,
+  onCancel,
+  onCopyLink,
+  onReset,
+}: {
+  selectedStopIds: string[];
+  selectedStops: StopWithDepartures[];
+  nearbyStops: NearbyStopCandidate[];
+  status: string | null;
+  shareStatus: "idle" | "copied" | "manual";
+  shareUrl: string;
+  locationStatus: AsyncUiState;
+  onUseLocation: () => void;
+  onRefreshNearby: () => void;
+  onAddStop: (candidate: NearbyStopCandidate) => void;
+  onRemoveStop: (stopId: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onCopyLink: () => void;
+  onReset: () => void;
+}) {
+  const selectedStopMap = new Map(selectedStops.map((stop) => [stop.gtfsId, stop]));
+  const canAddMore = selectedStopIds.length < MAX_STOP_COUNT;
+  const locating = locationStatus === "loading";
+
+  return (
+    <div
+      data-testid="edit-stops-panel"
+      className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden rounded-[1.6rem] border border-cyan-200/15 bg-white/[0.04] p-3 text-sm text-slate-200 sm:p-4"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-semibold text-white">Edit stops</div>
+          <div className="mt-1 text-xs leading-5 text-slate-400">Tap the map near a tram stop or add a nearby suggestion.</div>
+        </div>
+        <div className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300">
+          {selectedStopIds.length}/{MAX_STOP_COUNT}
+        </div>
+      </div>
+
+      <div className="grid min-h-0 gap-3 overflow-auto pr-1">
+        <div>
+          <div className="mb-2 text-[10px] uppercase tracking-[0.18em] text-slate-400">Selected</div>
+          <div className="grid gap-2" data-testid="edit-selected-stops">
+            {selectedStopIds.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/12 bg-white/[0.03] px-3 py-3 text-xs leading-5 text-slate-400">
+                No stops selected yet.
+              </div>
+            ) : (
+              selectedStopIds.map((stopId) => {
+                const stop = selectedStopMap.get(stopId);
+                return (
+                  <div key={stopId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-white">{stop?.name ?? stopId}</div>
+                      <div className="truncate text-xs text-slate-400">{stop?.code ?? stopId}</div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${stop?.name ?? stopId}`}
+                      onClick={() => onRemoveStop(stopId)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-200/15 bg-rose-300/10 text-rose-100 transition hover:bg-rose-300/16"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Nearby</div>
+            <button
+              type="button"
+              data-testid="edit-refresh-nearby"
+              onClick={onRefreshNearby}
+              className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-200 transition hover:bg-white/10"
+            >
+              <Crosshair className="h-3.5 w-3.5" />
+              Refresh
+            </button>
+          </div>
+          <div className="grid gap-2" data-testid="edit-nearby-stops">
+            {nearbyStops.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/12 bg-white/[0.03] px-3 py-3 text-xs leading-5 text-slate-400">
+                No nearby suggestions loaded.
+              </div>
+            ) : (
+              nearbyStops.map((candidate) => {
+                const selected = selectedStopIds.includes(candidate.gtfsId);
+                return (
+                  <button
+                    key={candidate.gtfsId}
+                    type="button"
+                    disabled={selected || !canAddMore}
+                    onClick={() => onAddStop(candidate)}
+                    className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-2 text-left transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-white">{formatStopLabel(candidate)}</span>
+                      <span className="block truncate text-xs text-slate-400">{formatDistance(candidate.distance)} away</span>
+                    </span>
+                    <Plus className="h-4 w-4 text-cyan-200" />
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {status ? (
+        <div className="rounded-2xl border border-white/10 bg-slate-950/35 px-3 py-2 text-xs leading-5 text-slate-300">
+          {status}
+        </div>
+      ) : null}
+
+      {shareStatus === "manual" ? (
+        <input
+          readOnly
+          value={shareUrl}
+          className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-200"
+          onFocus={(event) => event.currentTarget.select()}
+        />
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onUseLocation}
+          disabled={locating}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-70"
+        >
+          {locating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <LocateFixed className="h-4 w-4" />}
+          Location
+        </button>
+        <button
+          type="button"
+          onClick={onCopyLink}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
+        >
+          {shareStatus === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+          {shareStatus === "copied" ? "Copied" : "Copy link"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-testid="edit-reset-choices"
+          onClick={onReset}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-amber-200/20 bg-amber-300/10 px-3 py-2 text-xs font-medium text-amber-50 transition hover:bg-amber-300/16"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Reset
+        </button>
+        <button
+          type="button"
+          data-testid="edit-save"
+          onClick={onSave}
+          disabled={selectedStopIds.length === 0}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-200/25 bg-cyan-300/12 px-3 py-2 text-xs font-medium text-cyan-50 transition hover:bg-cyan-300/18 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Check className="h-4 w-4" />
+          Done
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function ModeIcon({ mode, className }: { mode: string; className?: string }) {
@@ -1082,6 +1680,60 @@ function formatClockTime(value: Date) {
   }).format(value);
 }
 
+function getBrowserLocation(): Promise<{ lat: number; lon: number }> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Location is not available in this browser. Choose stops manually."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+        });
+      },
+      () => {
+        reject(new Error("Location permission was denied or unavailable. Choose stops manually."));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: GEOLOCATION_TIMEOUT_MS,
+        maximumAge: 60_000,
+      },
+    );
+  });
+}
+
+function addStopId(stopIds: string[], stopId: string) {
+  if (stopIds.includes(stopId) || stopIds.length >= MAX_STOP_COUNT) {
+    return stopIds;
+  }
+
+  return [...stopIds, stopId].slice(0, MAX_STOP_COUNT);
+}
+
+function formatStopLabel(stop: Pick<NearbyStopCandidate, "code" | "name">) {
+  return [stop.code, stop.name].filter(Boolean).join(" ");
+}
+
+function formatDistance(distance: number) {
+  if (!Number.isFinite(distance)) {
+    return "nearby";
+  }
+
+  if (distance >= 1000) {
+    return `${(distance / 1000).toFixed(1)} km`;
+  }
+
+  return `${Math.round(distance)} m`;
+}
+
+function getShareUrl(viewport: ViewportState, stopIds: string[]) {
+  return new URL(serializeUrlState({ viewport, stopIds }), window.location.href).toString();
+}
+
 function getDepartureLimit(stopCount: number) {
   if (stopCount >= 4) {
     return 6;
@@ -1105,6 +1757,57 @@ function filterStopsWithActiveDepartures(stops: StopWithDepartures[], now: Date)
   }));
 }
 
+function orderStopsByIds(stops: StopWithDepartures[], orderedIds: string[]) {
+  if (orderedIds.length === 0) {
+    return stops;
+  }
+
+  const order = new Map(orderedIds.map((stopId, index) => [stopId, index]));
+  return [...stops].sort(
+    (a, b) => (order.get(a.gtfsId) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.gtfsId) ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+
+function mergeArrangedStopIds(current: string[], stops: StopWithDepartures[]) {
+  const stopIds = stops.map((stop) => stop.gtfsId);
+  const next = [
+    ...current.filter((stopId) => stopIds.includes(stopId)),
+    ...stopIds.filter((stopId) => !current.includes(stopId)),
+  ];
+
+  return sameStringList(current, next) ? current : next;
+}
+
+function getArrangedStopIds(
+  stops: StopWithDepartures[],
+  map: MapLibreMap,
+  isStackedLayout: boolean,
+  current: string[],
+) {
+  if (stops.length <= 1) {
+    return mergeArrangedStopIds(current, stops);
+  }
+
+  const next = [...stops]
+    .sort((a, b) => {
+      const aPoint = map.project([a.lon, a.lat]);
+      const bPoint = map.project([b.lon, b.lat]);
+      const primaryDelta = isStackedLayout ? aPoint.x - bPoint.x : aPoint.y - bPoint.y;
+      if (Math.abs(primaryDelta) > 1) {
+        return primaryDelta;
+      }
+
+      return isStackedLayout ? aPoint.y - bPoint.y : aPoint.x - bPoint.x;
+    })
+    .map((stop) => stop.gtfsId);
+
+  return sameStringList(current, next) ? current : next;
+}
+
+function sameStringList(a: string[], b: string[]) {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 function isDepartureExpired(departure: Departure, now: Date) {
   return getDepartureTimestamp(departure) + DEPARTURE_EXPIRY_GRACE_MS < now.getTime();
 }
@@ -1115,6 +1818,15 @@ function getDepartureTimestamp(departure: Departure) {
 
 function getMaxDepartureCount(stops: StopWithDepartures[]) {
   return stops.reduce((max, stop) => Math.max(max, stop.departures.length), 0);
+}
+
+function getDuplicateStopNames(stops: StopWithDepartures[]) {
+  const counts = new Map<string, number>();
+  for (const stop of stops) {
+    counts.set(stop.name, (counts.get(stop.name) ?? 0) + 1);
+  }
+
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
 }
 
 function getDepartureKey(stopId: string, departure: Departure) {

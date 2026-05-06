@@ -47,8 +47,14 @@ cp .env.example .env.local
 4. Start the app:
 
 ```bash
-npm run dev
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
+
+When running from WSL and opening the app from Windows, do not bind Vite to
+`127.0.0.1` inside WSL. Use `--host 0.0.0.0` so Windows localhost forwarding can
+reach the dev server. Vite will print both `http://localhost:5173/` and WSL
+network URLs; either can be used from the Windows host depending on local
+forwarding behavior.
 
 ## Testing
 
@@ -77,13 +83,15 @@ npx playwright install chromium
 - `zoom`: map zoom level
 - `stops`: comma-separated stop references, using either GTFS IDs like `HSL:1040129` or HSL stop codes like `H0831`
 
-If `stops` is omitted, the app defaults to `H0831,H0446`.
+If URL parameters are present, they override browser-saved configuration. If `stops` is omitted, the app uses browser-saved stops when available; otherwise it opens the first-run setup flow for choosing nearby tram stops.
 
 Example:
 
 ```text
 /?lat=60.17142&lon=24.94123&zoom=13.4&stops=H0831,H0446
 ```
+
+The in-app menu and edit mode include a copy-link action that creates a shareable URL with the current `lat`, `lon`, `zoom`, and `stops`.
 
 ## Notes
 
