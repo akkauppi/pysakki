@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import {
-  fetchNearbyTramStops,
+  fetchNearbyStops,
   fetchStopsWithDepartures,
   type NearbyStopCandidate,
   type StopWithDepartures,
@@ -170,6 +170,7 @@ export default function App() {
   const compactSchedule = visibleDepartureCount <= 2;
   const showScheduledTime = scheduleFit.rowVariant === "full";
   const showModeIcon = scheduleFit.rowVariant !== "compact";
+  const showHeadsign = scheduleFit.rowVariant !== "compact";
   const ultraCompactSchedule = scheduleFit.rowVariant === "compact";
   const denseScheduleHeader = scheduleFit.rowVariant !== "full" || displayStops.length >= 4;
   const emptySchedule = visibleDepartureCount === 0;
@@ -454,7 +455,7 @@ export default function App() {
         })
         .catch((error: unknown) => {
           if (!cancelled) {
-            setStopsError(error instanceof Error ? error.message : "Stop data request failed.");
+            setStopsError(error instanceof Error ? error.message : "Departure data request failed.");
           }
         })
         .finally(() => {
@@ -502,7 +503,7 @@ export default function App() {
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          setStopsError(error instanceof Error ? error.message : "Stop data request failed.");
+          setStopsError(error instanceof Error ? error.message : "Departure data request failed.");
         }
       })
 
@@ -546,12 +547,12 @@ export default function App() {
       }
 
       mapRef.current.fitBounds(bounds, {
-        padding: { top: 72, right: 72, bottom: 72, left: 72 },
-        maxZoom: 16.2,
+        padding: getMapFitPadding(mapRef.current, isStackedLayout, splitStackedSchedules),
+        maxZoom: 17.6,
         duration: 900,
       });
     }
-  }, [displayStops, editMode, mapReady, setupMode, stops]);
+  }, [displayStops, editMode, isStackedLayout, mapReady, setupMode, splitStackedSchedules, stops]);
 
   useEffect(() => {
     if (!mapReady || !vehicleSourceRef.current) {
@@ -710,8 +711,8 @@ export default function App() {
 
     const map = mapRef.current;
     const addStopFromMapClick = (event: maplibregl.MapMouseEvent) => {
-      setEditStatus("Looking for nearby tram stops...");
-      fetchNearbyTramStops({
+      setEditStatus("Looking for nearby departures...");
+      fetchNearbyStops({
         lat: event.lngLat.lat,
         lon: event.lngLat.lng,
         maxDistance: 450,
@@ -722,7 +723,7 @@ export default function App() {
           setNearbyStops(candidates);
           const nextCandidate = candidates.find((candidate) => !stopIdsRef.current.includes(candidate.gtfsId));
           if (!nextCandidate) {
-            setEditStatus(candidates.length > 0 ? "Those nearby tram stops are already selected." : "No tram stop found at that point.");
+            setEditStatus(candidates.length > 0 ? "Those nearby departures are already selected." : "No transit stop found at that point.");
             return;
           }
 
@@ -749,7 +750,7 @@ export default function App() {
     setSetupMode(false);
     setEditMode(true);
     setMenuOpen(false);
-    setEditStatus("Pan the map, tap a tram stop area, or use nearby suggestions.");
+    setEditStatus("Pan the map, tap a transit stop area, or use nearby suggestions.");
     setShareStatus("idle");
   };
 
@@ -760,7 +761,7 @@ export default function App() {
     };
     setSetupMode(false);
     setEditMode(true);
-    setEditStatus("Pan the map and tap near tram stops to add them.");
+    setEditStatus("Pan the map and tap near transit stops to add them.");
     setShareStatus("idle");
   };
 
@@ -783,7 +784,7 @@ export default function App() {
         duration: 700,
       });
 
-      const candidates = await fetchNearbyTramStops({
+      const candidates = await fetchNearbyStops({
         lat: nextViewport.lat,
         lon: nextViewport.lon,
       });
@@ -795,14 +796,14 @@ export default function App() {
       setLocationStatus("success");
       setEditStatus(
         candidates.length > 0
-          ? "Nearest tram stops selected. Review and press Done to save."
-          : "No nearby tram stops found. Pan the map and tap near stops to add them.",
+          ? "Nearest departures selected. Review and press Done to save."
+          : "No nearby departures found. Pan the map and tap near transit stops to add them.",
       );
     } catch (error) {
       setLocationStatus("error");
       setSetupMode(false);
       setEditMode(true);
-      setEditStatus(error instanceof Error ? error.message : "Location unavailable. Choose stops manually.");
+      setEditStatus(error instanceof Error ? error.message : "Location unavailable. Choose manually.");
     }
   };
 
@@ -816,16 +817,16 @@ export default function App() {
         }
       : viewport;
 
-    setEditStatus("Refreshing nearby tram stops...");
+    setEditStatus("Refreshing nearby departures...");
     setShareStatus("idle");
 
     try {
-      const candidates = await fetchNearbyTramStops({
+      const candidates = await fetchNearbyStops({
         lat: nextViewport.lat,
         lon: nextViewport.lon,
       });
       setNearbyStops(candidates);
-      setEditStatus(candidates.length > 0 ? "Nearby tram stops refreshed." : "No nearby tram stops found.");
+      setEditStatus(candidates.length > 0 ? "Nearby departures refreshed." : "No nearby departures found.");
     } catch (error) {
       setEditStatus(error instanceof Error ? error.message : "Nearby stop lookup failed.");
     }
@@ -839,7 +840,7 @@ export default function App() {
 
   const removeSelectedStop = (stopId: string) => {
     setStopIds((current) => current.filter((currentStopId) => currentStopId !== stopId));
-    setEditStatus("Stop removed.");
+    setEditStatus("Removed.");
     setShareStatus("idle");
   };
 
@@ -920,6 +921,10 @@ export default function App() {
     const color = STOP_MARKER_COLORS[displayIndex] ?? "#ffffff";
     const leaderId = getLeaderId(stop, displayIndex);
     const directionHint = formatStopDirectionHint(stop, denseScheduleHeader || ultraCompactSchedule);
+    const metadataDirection = stop.code && directionHint?.startsWith(stop.code)
+      ? directionHint.slice(stop.code.length).replace(/^[\s·]+/, "").trim()
+      : directionHint;
+    const stopMeta = stop.code ?? "";
 
     return (
       <section
@@ -934,27 +939,24 @@ export default function App() {
         }}
         className={cn(
           "relative z-30 flex min-h-0 flex-col overflow-hidden border backdrop-blur-xl",
-          ultraCompactSchedule ? "rounded-[1.35rem]" : compactSchedule ? "rounded-[1.5rem]" : "rounded-[1.65rem]",
-          emptySchedule ? "p-1 sm:p-1.5" : ultraCompactSchedule ? "p-2 sm:p-2.5" : compactSchedule ? "p-2.5 sm:p-3" : "p-4",
+          ultraCompactSchedule ? "rounded-[1.1rem]" : compactSchedule ? "rounded-[1.25rem]" : "rounded-[1.5rem]",
+          emptySchedule ? "p-1.5" : ultraCompactSchedule ? "p-1.5" : compactSchedule ? "p-1.5" : "p-3.5 sm:p-4",
         )}
         style={getStopCardStyle(color)}
       >
-        <div className={cn("flex items-start gap-3", emptySchedule ? "mb-0" : ultraCompactSchedule ? "mb-1" : compactSchedule ? "mb-2" : "mb-3")}>
+        <div className={cn("flex items-start gap-2", emptySchedule ? "mb-0" : ultraCompactSchedule ? "mb-0" : compactSchedule ? "mb-0" : "mb-2.5")}>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className={cn("uppercase text-slate-300", emptySchedule || denseScheduleHeader ? "hidden" : ultraCompactSchedule ? "text-[8px] tracking-[0.1em]" : compactSchedule ? "text-[9px] tracking-[0.16em]" : "text-[10px] tracking-[0.22em]")}>
-                  {stop.code} {stop.vehicleMode ? `· ${stop.vehicleMode}` : ""}
-                </div>
-                <div className={cn("truncate font-semibold text-white", emptySchedule ? "text-[clamp(0.62rem,2.4vw,0.78rem)] leading-none" : denseScheduleHeader ? "text-[clamp(0.76rem,2.4vw,0.95rem)] leading-tight" : ultraCompactSchedule ? "mt-0.5 text-[clamp(0.72rem,2.8vw,0.9rem)] leading-none" : compactSchedule ? "mt-1 text-[clamp(0.86rem,2.6vw,1.05rem)] leading-tight" : "mt-1 text-[clamp(1rem,1.35vw,1.35rem)]")}>
+                <div className={cn("truncate font-semibold text-white", emptySchedule ? "text-[clamp(0.78rem,2.2vw,0.92rem)] leading-none" : denseScheduleHeader ? "text-[clamp(0.8rem,2.2vw,0.98rem)] leading-none" : ultraCompactSchedule ? "text-[clamp(0.8rem,2.4vw,0.96rem)] leading-none" : compactSchedule ? "text-[clamp(0.9rem,2.4vw,1.08rem)] leading-tight" : "text-[clamp(1.05rem,1.35vw,1.35rem)] leading-tight")}>
                   {stop.name}
                 </div>
-                {directionHint ? (
+                {stopMeta || directionHint ? (
                   <div
                     data-testid="stop-direction-hint"
-                    className={cn("truncate text-cyan-100/85", denseScheduleHeader || ultraCompactSchedule ? "mt-0.5 text-[9px] leading-tight" : "mt-1 text-xs leading-4")}
+                    className={cn("truncate text-cyan-100/85", denseScheduleHeader || ultraCompactSchedule ? "mt-0.5 text-[9px] leading-none" : "mt-1 text-xs leading-4")}
                   >
-                    {directionHint}
+                    {[stopMeta, metadataDirection].filter(Boolean).join(" · ")}
                   </div>
                 ) : null}
               </div>
@@ -993,10 +995,12 @@ export default function App() {
 
               <div className="min-w-0 overflow-hidden">
                 <div className="flex items-end gap-2">
-                  <span className="text-[length:var(--schedule-route-size)] font-semibold leading-none text-white">
+                  <span data-testid="departure-route" className="text-[length:var(--schedule-route-size)] font-semibold leading-none text-white">
                     {departure.routeShortName ?? departure.routeMode}
                   </span>
-                  <span className="truncate pb-0.5 text-[length:var(--schedule-headsign-size)] text-slate-200">{departure.headsign}</span>
+                  {showHeadsign ? (
+                    <span className="truncate pb-0.5 text-[length:var(--schedule-headsign-size)] leading-none text-slate-200">{departure.headsign}</span>
+                  ) : null}
                 </div>
                 {showScheduledTime ? (
                   <div data-testid="departure-scheduled-time" className="mt-[var(--schedule-time-mt)] truncate uppercase text-[length:var(--schedule-time-size)] leading-tight tracking-[var(--schedule-time-tracking)] text-slate-300">
@@ -1006,7 +1010,7 @@ export default function App() {
               </div>
 
               <div className="text-right">
-                <div className="text-[length:var(--schedule-relative-size)] font-semibold leading-none text-white tabular-nums">
+                <div data-testid="departure-relative-time" className="text-[length:var(--schedule-relative-size)] font-semibold leading-none text-white tabular-nums">
                   {formatRelativeMinutes(departure.serviceDay, departure.realtimeDeparture)}
                 </div>
               </div>
@@ -1033,16 +1037,16 @@ export default function App() {
 
       <div
         className={cn(
-          "relative grid h-full min-h-0 grid-cols-1 gap-3 p-3 md:grid-cols-[minmax(24rem,36vw)_minmax(0,1fr)] md:grid-rows-1",
+          "relative grid h-full min-h-0 grid-cols-1 gap-2 p-2 md:grid-cols-[minmax(24rem,36vw)_minmax(0,1fr)] md:grid-rows-1 md:gap-3 md:p-3",
           splitStackedSchedules
             ? "grid-rows-[minmax(0,0.95fr)_minmax(0,0.85fr)_minmax(0,0.95fr)]"
-            : "grid-rows-[minmax(0,1.3fr)_minmax(0,1fr)]",
+            : "grid-rows-[minmax(0,1.65fr)_minmax(0,0.75fr)]",
         )}
       >
-        <section className="relative z-30 min-h-0 overflow-hidden rounded-[2rem] border border-white/10 bg-slate-950/72 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md">
+        <section className="relative z-30 min-h-0 overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/72 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md md:rounded-[2rem]">
           <div className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent md:block" />
-          <div className="flex h-full min-h-0 flex-col p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex h-full min-h-0 flex-col p-2.5 sm:p-4 md:p-5">
+            <div className="mb-2 flex items-center justify-between gap-3 sm:mb-3">
               <div className="inline-flex items-center overflow-hidden rounded-full border border-emerald-300/25 bg-emerald-400/10 text-[10px] font-medium uppercase tracking-[0.24em] text-emerald-200">
                 <div className="inline-flex items-center gap-2 px-3 py-1.5">
                   <MapPinned className="h-3.5 w-3.5" />
@@ -1080,13 +1084,11 @@ export default function App() {
               </Notice>
             ) : null}
 
-            <div className="mb-3 flex items-center justify-between text-[11px] uppercase tracking-[0.2em] text-slate-400">
-              <span>Stops</span>
-              <span>
-                Up to {MAX_STOP_COUNT}
-                {stopsLoading ? " · loading" : ""}
-              </span>
-            </div>
+            {stopsLoading ? (
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                Loading departures
+              </div>
+            ) : null}
 
             {setupMode ? (
               <FirstRunPanel
@@ -1151,7 +1153,7 @@ export default function App() {
         {splitStackedSchedules ? (
           <section
             data-testid="bottom-stop-panel"
-            className="relative z-30 min-h-0 overflow-hidden rounded-[2rem] border border-white/10 bg-slate-950/72 p-3 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md sm:p-4"
+            className="relative z-30 min-h-0 overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/72 p-2 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md sm:p-3 md:rounded-[2rem] md:p-4"
           >
             {renderStopBoard(bottomDisplayStops, bottomStopBoardLayout, "bottom-stop-board")}
           </section>
@@ -1285,7 +1287,7 @@ export default function App() {
               value={`${viewport.lat.toFixed(4)}, ${viewport.lon.toFixed(4)} · z${viewport.zoom.toFixed(2)}`}
             />
             <InfoRow
-              label="Stops"
+              label="Selection"
               value={stopIds.length > 0 ? stopIds.join(", ") : "None"}
             />
             <InfoRow
@@ -1302,7 +1304,7 @@ export default function App() {
               className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-200/20 bg-cyan-300/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-300/16"
             >
               <MapPinned className="h-4 w-4" />
-              Edit stops
+              Edit
             </button>
             <button
               type="button"
@@ -1402,9 +1404,9 @@ function FirstRunPanel({
       className="flex min-h-0 flex-1 flex-col justify-center rounded-[1.6rem] border border-cyan-200/15 bg-white/[0.04] p-4 text-sm text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] sm:p-5"
     >
       <div className="mb-4">
-        <div className="text-lg font-semibold text-white">Set up nearby tram stops</div>
+        <div className="text-lg font-semibold text-white">Set up nearby departures</div>
         <div className="mt-2 max-w-[30rem] text-sm leading-6 text-slate-300">
-          Use your location to select nearby tram stops, or choose stops from the map.
+          Use your location to select nearby departures, or choose from the map.
         </div>
       </div>
 
@@ -1432,7 +1434,7 @@ function FirstRunPanel({
 
       {locationStatus === "error" ? (
         <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-50">
-          Location was unavailable. You can still choose stops from the map.
+          Location was unavailable. You can still choose from the map.
         </div>
       ) : null}
     </div>
@@ -1483,7 +1485,7 @@ function EditStopsPanel({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="font-semibold text-white">Edit stops</div>
+          <div className="font-semibold text-white">Edit departures</div>
           <div className="mt-0.5 text-xs leading-4 text-slate-400">Tap the map or add a nearby suggestion.</div>
         </div>
         <div className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300">
@@ -1497,7 +1499,7 @@ function EditStopsPanel({
           <div className="grid gap-2" data-testid="edit-selected-stops">
             {selectedStopIds.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-white/12 bg-white/[0.03] px-3 py-3 text-xs leading-5 text-slate-400">
-                No stops selected yet.
+                Nothing selected yet.
               </div>
             ) : (
               selectedStopIds.map((stopId) => {
@@ -1731,7 +1733,7 @@ function formatClockTime(value: Date) {
 function getBrowserLocation(): Promise<{ lat: number; lon: number }> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error("Location is not available in this browser. Choose stops manually."));
+      reject(new Error("Location is not available in this browser. Choose manually."));
       return;
     }
 
@@ -1743,7 +1745,7 @@ function getBrowserLocation(): Promise<{ lat: number; lon: number }> {
         });
       },
       () => {
-        reject(new Error("Location permission was denied or unavailable. Choose stops manually."));
+        reject(new Error("Location permission was denied or unavailable. Choose manually."));
       },
       {
         enableHighAccuracy: true,
@@ -1893,6 +1895,36 @@ function getDepartureKey(stopId: string, departure: Departure) {
   ].join("-");
 }
 
+function getMapFitPadding(
+  map: MapLibreMap,
+  isStackedLayout: boolean,
+  splitStackedSchedules: boolean,
+): maplibregl.PaddingOptions {
+  const canvas = map.getCanvas();
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+
+  if (isStackedLayout) {
+    const horizontal = clamp(Math.round(width * 0.06), 18, 42);
+    const vertical = clamp(Math.round(height * (splitStackedSchedules ? 0.04 : 0.06)), 14, 38);
+    return {
+      top: vertical,
+      right: horizontal,
+      bottom: vertical,
+      left: horizontal,
+    };
+  }
+
+  const horizontal = clamp(Math.round(width * 0.08), 42, 96);
+  const vertical = clamp(Math.round(height * 0.09), 36, 84);
+  return {
+    top: vertical,
+    right: horizontal,
+    bottom: vertical,
+    left: horizontal,
+  };
+}
+
 type ScheduleRowVariant = "full" | "compactIcon" | "compact";
 
 type ScheduleFit = {
@@ -1911,17 +1943,23 @@ function getScheduleFit(
   previousRowVariant: ScheduleRowVariant,
   hasDirectionHints: boolean,
 ): ScheduleFit {
-  const minScale = 0.72;
-  const maxScale = 1.16;
-  const minComfortInset = 8;
-  const boardHeight = isStackedLayout ? screenSize.height * 0.42 : screenSize.height - 132;
+  const minScale = isStackedLayout ? 0.88 : stopCount >= 4 && screenSize.height < 720 ? 0.86 : stopCount >= 3 && screenSize.height < 720 ? 0.9 : 0.96;
+  const maxScale = isStackedLayout ? 1.22 : 1.34;
+  const minComfortInset = isStackedLayout ? 4 : stopCount >= 4 && screenSize.height < 720 ? 3 : stopCount >= 3 ? 4 : 8;
+  const boardHeight = isStackedLayout
+    ? screenSize.height * (screenSize.height < screenSize.width ? 0.34 : 0.43)
+    : screenSize.height - 118;
   const layoutRows = isStackedLayout ? (stopCount <= 2 ? 1 : 2) : Math.max(stopCount, 1);
   const cardHeight = boardHeight / Math.max(layoutRows, 1) - getScheduleCardSafetyReserve(stopCount, isStackedLayout);
-  const maxCandidate = Math.max(0, maxDepartureCount);
-  const widthScale = screenSize.width < 390 ? 0.82 : screenSize.width < 430 ? 0.88 : screenSize.width < 640 ? 0.94 : 1;
-  const variants = getScheduleVariantPriority(isStackedLayout, screenSize.height, previousRowVariant);
+  const maxDepartureCountForViewport = !isStackedLayout && stopCount >= 3 && screenSize.height < 720
+    ? Math.min(maxDepartureCount, 2)
+    : maxDepartureCount;
+  const maxCandidate = Math.max(0, maxDepartureCountForViewport);
+  const minVisibleCount = Math.min(maxCandidate, maxCandidate >= 2 ? 2 : 1);
+  const widthScale = screenSize.width < 390 ? 0.98 : 1;
+  const variants = getScheduleVariantPriority(stopCount, isStackedLayout, screenSize.height, previousRowVariant);
 
-  if (stopCount >= 3 && isStackedLayout && cardHeight < 112) {
+  if (maxCandidate === 0) {
     return {
       visibleCount: 0,
       scale: minScale,
@@ -1931,21 +1969,20 @@ function getScheduleFit(
     };
   }
 
-  for (let visibleCount = maxCandidate; visibleCount >= 1; visibleCount -= 1) {
+  for (let visibleCount = maxCandidate; visibleCount >= minVisibleCount; visibleCount -= 1) {
     const headerReserve = getScheduleHeaderReserve(stopCount, visibleCount, hasDirectionHints);
     const rowGap = getScheduleBaseListGap(visibleCount);
     const rowBudget = (cardHeight - headerReserve - rowGap * Math.max(0, visibleCount - 1)) / visibleCount;
     const targetRowHeight = getScheduleTargetRowHeight(visibleCount);
     const rowHeight = Math.min(rowBudget, targetRowHeight * maxScale);
-    const scale = clamp(rowHeight / targetRowHeight, minScale, maxScale);
-    const contentScale = clamp(scale * widthScale, minScale, Math.min(maxScale, 0.98));
 
     for (const rowVariant of variants) {
       if (rowBudget >= getScheduleMinimumRowHeight(visibleCount, rowVariant, minComfortInset)) {
+        const resolvedScale = clamp(rowHeight / targetRowHeight, minScale, maxScale);
         return {
           visibleCount,
-          scale,
-          contentScale,
+          scale: resolvedScale,
+          contentScale: clamp(resolvedScale * widthScale, minScale, maxScale),
           rowVariant,
           rowHeight,
         };
@@ -1953,30 +1990,48 @@ function getScheduleFit(
     }
   }
 
+  const fallbackHeaderReserve = getScheduleHeaderReserve(stopCount, minVisibleCount, hasDirectionHints);
+  const fallbackRowGap = getScheduleBaseListGap(minVisibleCount);
+  const fallbackRowBudget = Math.max(
+    getScheduleMinimumRowHeight(minVisibleCount, "compact", minComfortInset),
+    (cardHeight - fallbackHeaderReserve - fallbackRowGap * Math.max(0, minVisibleCount - 1)) / Math.max(1, minVisibleCount),
+  );
+  const fallbackTargetHeight = getScheduleTargetRowHeight(minVisibleCount);
+  const fallbackScale = clamp(fallbackRowBudget / fallbackTargetHeight, minScale, maxScale);
+
   return {
-    visibleCount: maxCandidate > 0 && cardHeight >= 74 ? 1 : 0,
-    scale: minScale,
-    contentScale: minScale,
+    visibleCount: minVisibleCount,
+    scale: fallbackScale,
+    contentScale: clamp(fallbackScale * widthScale, minScale, maxScale),
     rowVariant: "compact",
-    rowHeight: maxCandidate > 0 && cardHeight >= 74 ? Math.max(38, Math.min(cardHeight - getScheduleHeaderReserve(stopCount, 1, hasDirectionHints), getScheduleTargetRowHeight(1))) : 0,
+    rowHeight: fallbackRowBudget,
   };
 }
 
 function getScheduleVariantPriority(
+  stopCount: number,
   isStackedLayout: boolean,
   screenHeight: number,
   previousRowVariant: ScheduleRowVariant,
 ): ScheduleRowVariant[] {
   if (!isStackedLayout) {
+    if (screenHeight >= 900) {
+      return ["full"];
+    }
+
+    if (stopCount >= 3 && screenHeight < 720) {
+      return ["compact"];
+    }
+
     return ["full", "compactIcon", "compact"];
   }
 
-  if (screenHeight < 720) {
+  if (stopCount >= 3 || screenHeight < 720) {
     return ["compact"];
   }
 
   if (screenHeight >= 760 || previousRowVariant === "compactIcon" || previousRowVariant === "full") {
-    return ["compactIcon", "compact"];
+    return stopCount >= 4 ? ["compact", "compactIcon"] : ["compactIcon", "compact"];
   }
 
   return ["compact"];
@@ -1988,52 +2043,57 @@ function getScheduleScaleStyle(
 ): CSSProperties {
   const { scale, contentScale, rowVariant, rowHeight, visibleCount } = fit;
   const hasIcon = rowVariant !== "compact";
-  const rowPadX = hasIcon ? (compactSchedule ? 9 : 12) : 10;
-  const rowPadY = hasIcon ? (compactSchedule ? 9 : 13) : 9;
-  const iconSize = compactSchedule ? 32 : 48;
-  const modeIconSize = compactSchedule ? 20 : 28;
+  const rowPadX = hasIcon ? (compactSchedule ? 9 : 12) : 8;
+  const rowPadY = hasIcon ? (compactSchedule ? 7 : 13) : 4;
+  const iconSize = compactSchedule ? 34 : 48;
+  const modeIconSize = compactSchedule ? 22 : 28;
   const rowGap = hasIcon ? (compactSchedule ? 8 : 12) : 8;
   const listGap = hasIcon ? (compactSchedule ? 6 : 8) : 6;
-  const comfortableIconSize = Math.max(0, rowHeight - 16);
+  const resolvedRowHeight = rowVariant === "compact" ? Math.min(rowHeight, 48) : rowHeight;
+  const comfortableIconSize = Math.max(0, rowHeight - 14);
   const resolvedIconSize = Math.min(Math.max(24, Math.round(iconSize * contentScale)), comfortableIconSize);
-  const maxRowRadius = rowVariant === "compact" ? 14 : compactSchedule ? 16 : 18;
+  const maxRowRadius = rowVariant === "compact" ? 12 : compactSchedule ? 14 : 18;
 
   return {
     gap: `${Math.max(3, Math.round(listGap * scale))}px`,
     gridTemplateRows: visibleCount > 0 ? `repeat(${visibleCount}, var(--schedule-row-height))` : undefined,
-    alignContent: "space-between",
-    "--schedule-row-gap": `${Math.max(5, Math.round(rowGap * scale))}px`,
+    alignContent: "start",
+    "--schedule-row-gap": `${Math.max(4, Math.round(rowGap * scale))}px`,
     "--schedule-row-px": `${Math.max(8, Math.round(rowPadX * scale))}px`,
-    "--schedule-row-py": `${Math.max(8, Math.round(rowPadY * scale))}px`,
-    "--schedule-row-radius": `${Math.max(10, Math.min(maxRowRadius, Math.round(rowHeight * 0.3)))}px`,
+    "--schedule-row-py": `${Math.max(hasIcon ? 6 : 4, Math.round(rowPadY * scale))}px`,
+    "--schedule-row-radius": `${Math.max(6, Math.min(maxRowRadius, Math.round(resolvedRowHeight * 0.3)))}px`,
     "--schedule-icon-radius": `${Math.max(10, Math.round(16 * contentScale))}px`,
     "--schedule-icon-size": `${Math.round(resolvedIconSize)}px`,
     "--schedule-mode-icon-size": `${Math.max(16, Math.round(modeIconSize * contentScale))}px`,
-    "--schedule-route-size": `${(hasIcon ? (compactSchedule ? 1.18 * contentScale : 1.72 * contentScale) : 1.0 * contentScale).toFixed(3)}rem`,
-    "--schedule-headsign-size": `${(hasIcon ? (compactSchedule ? 0.75 * contentScale : 0.9 * contentScale) : 0.68 * contentScale).toFixed(3)}rem`,
-    "--schedule-time-size": `${(compactSchedule ? 0.62 * contentScale : 0.75 * contentScale).toFixed(3)}rem`,
-    "--schedule-relative-size": `${(hasIcon ? (compactSchedule ? 1.32 * contentScale : 2.0 * contentScale) : 1.02 * contentScale).toFixed(3)}rem`,
+    "--schedule-route-size": `${(hasIcon ? (compactSchedule ? 1.42 * contentScale : 1.72 * contentScale) : 1.34 * contentScale).toFixed(3)}rem`,
+    "--schedule-headsign-size": `${(hasIcon ? (compactSchedule ? 0.86 * contentScale : 0.94 * contentScale) : 0.82 * contentScale).toFixed(3)}rem`,
+    "--schedule-time-size": `${(compactSchedule ? 0.72 * contentScale : 0.78 * contentScale).toFixed(3)}rem`,
+    "--schedule-relative-size": `${(hasIcon ? (compactSchedule ? 1.54 * contentScale : 2.0 * contentScale) : 1.42 * contentScale).toFixed(3)}rem`,
     "--schedule-time-mt": `${Math.max(2, Math.round(4 * contentScale))}px`,
     "--schedule-time-tracking": compactSchedule ? "0.12em" : "0.18em",
-    "--schedule-row-height": `${Math.max(38, Math.round(rowHeight))}px`,
+    "--schedule-row-height": `${Math.max(hasIcon ? 44 : 30, Math.round(resolvedRowHeight))}px`,
   } as CSSProperties;
 }
 
 function getScheduleHeaderReserve(stopCount: number, visibleCount: number, hasDirectionHints: boolean) {
-  const directionReserve = hasDirectionHints ? (stopCount >= 3 ? 12 : 16) : 0;
+  const directionReserve = hasDirectionHints && stopCount < 3 ? 14 : 0;
   if (visibleCount <= 1) {
-    return (stopCount >= 3 ? 38 : 44) + directionReserve;
+    return (stopCount >= 3 ? 26 : 48) + directionReserve;
   }
 
-  return (stopCount >= 3 ? 50 : 66) + directionReserve;
+  return (stopCount >= 3 ? 30 : 64) + directionReserve;
 }
 
 function getScheduleCardSafetyReserve(stopCount: number, isStackedLayout: boolean) {
   if (isStackedLayout) {
-    return stopCount >= 3 ? 20 : 14;
+    return stopCount >= 3 ? 8 : 14;
   }
 
-  return stopCount >= 3 ? 24 : 18;
+  if (stopCount >= 4) {
+    return 24;
+  }
+
+  return stopCount >= 3 ? 14 : 18;
 }
 
 function getScheduleBaseListGap(visibleCount: number) {
@@ -2041,7 +2101,7 @@ function getScheduleBaseListGap(visibleCount: number) {
     return 4;
   }
 
-  return visibleCount <= 2 ? 7 : 10;
+  return visibleCount <= 2 ? 6 : 8;
 }
 
 function getScheduleTargetRowHeight(visibleCount: number) {
@@ -2049,7 +2109,7 @@ function getScheduleTargetRowHeight(visibleCount: number) {
     return 54;
   }
 
-  return visibleCount <= 2 ? 62 : 74;
+  return visibleCount <= 2 ? 58 : 76;
 }
 
 function getScheduleMinimumRowHeight(
@@ -2058,14 +2118,14 @@ function getScheduleMinimumRowHeight(
   minComfortInset: number,
 ) {
   if (rowVariant === "full") {
-    return (visibleCount <= 2 ? 44 : 48) + minComfortInset * 2;
+    return (visibleCount <= 2 ? 54 : 58) + minComfortInset * 2;
   }
 
   if (rowVariant === "compactIcon") {
-    return (visibleCount <= 2 ? 28 : 30) + minComfortInset * 2;
+    return (visibleCount <= 2 ? 42 : 46) + minComfortInset * 2;
   }
 
-  return 22 + minComfortInset * 2;
+  return 24 + minComfortInset * 2;
 }
 
 function getStopBoardLayout(stopCount: number, isStackedLayout: boolean) {

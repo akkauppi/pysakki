@@ -8,6 +8,9 @@ const GRAPHQL_URL =
 const GEOCODING_URL =
   import.meta.env.VITE_DIGITRANSIT_GEOCODING_URL ??
   "https://api.digitransit.fi/geocoding/v1/search";
+const NEARBY_TRANSIT_MODES = ["BUS", "TRAM", "RAIL", "SUBWAY"] as const;
+
+export type TransitMode = (typeof NEARBY_TRANSIT_MODES)[number];
 
 const client = new GraphQLClient(GRAPHQL_URL, {
   headers: {
@@ -52,15 +55,15 @@ const stopQuery = gql`
   }
 `;
 
-const nearbyTramStopsQuery = gql`
-  query NearbyTramStops($lat: Float!, $lon: Float!, $maxDistance: Int!, $maxResults: Int!) {
+const nearbyTransitStopsQuery = gql`
+  query NearbyTransitStops($lat: Float!, $lon: Float!, $maxDistance: Int!, $maxResults: Int!) {
     nearest(
       lat: $lat
       lon: $lon
       maxDistance: $maxDistance
       maxResults: $maxResults
       filterByPlaceTypes: [STOP]
-      filterByModes: [TRAM]
+      filterByModes: [BUS, TRAM, RAIL, SUBWAY]
     ) {
       edges {
         node {
@@ -114,7 +117,7 @@ type StopQueryResult = {
   } | null;
 };
 
-type NearbyTramStopsQueryResult = {
+type NearbyTransitStopsQueryResult = {
   nearest: {
     edges: Array<{
       node: {
@@ -140,7 +143,7 @@ type NearbyTramStopsQueryResult = {
 };
 
 type NearbyPlace = NonNullable<
-  NonNullable<NearbyTramStopsQueryResult["nearest"]>["edges"][number]["node"]["place"]
+  NonNullable<NearbyTransitStopsQueryResult["nearest"]>["edges"][number]["node"]["place"]
 >;
 type NearbyStopPlace = Extract<
   NearbyPlace,
@@ -167,6 +170,7 @@ export type NearbyStopCandidate = {
   desc: string | null;
   lat: number;
   lon: number;
+  vehicleMode: TransitMode;
   distance: number;
 };
 
@@ -191,7 +195,7 @@ export type StopWithDepartures = {
   }>;
 };
 
-export async function fetchNearbyTramStops({
+export async function fetchNearbyStops({
   lat,
   lon,
   maxDistance = 1800,
@@ -204,12 +208,12 @@ export async function fetchNearbyTramStops({
   maxResults?: number;
   retryWithWiderRadius?: boolean;
 }): Promise<NearbyStopCandidate[]> {
-  const candidates = await requestNearbyTramStops({ lat, lon, maxDistance, maxResults });
+  const candidates = await requestNearbyStops({ lat, lon, maxDistance, maxResults });
   if (!retryWithWiderRadius || candidates.length >= 4 || maxDistance >= 3500) {
     return candidates.slice(0, 4);
   }
 
-  return requestNearbyTramStops({
+  return requestNearbyStops({
     lat,
     lon,
     maxDistance: 3500,
@@ -261,7 +265,7 @@ export async function fetchStopsWithDepartures(
   return results;
 }
 
-async function requestNearbyTramStops({
+async function requestNearbyStops({
   lat,
   lon,
   maxDistance,
@@ -272,7 +276,7 @@ async function requestNearbyTramStops({
   maxDistance: number;
   maxResults: number;
 }) {
-  const response = await client.request<NearbyTramStopsQueryResult>(nearbyTramStopsQuery, {
+  const response = await client.request<NearbyTransitStopsQueryResult>(nearbyTransitStopsQuery, {
     lat,
     lon,
     maxDistance,
@@ -283,7 +287,7 @@ async function requestNearbyTramStops({
   return (response.nearest?.edges ?? [])
     .flatMap((edge): NearbyStopCandidate[] => {
       const place = edge.node.place;
-      if (!isNearbyStopPlace(place) || place.vehicleMode !== "TRAM") {
+      if (!isNearbyStopPlace(place) || !isTransitMode(place.vehicleMode)) {
         return [];
       }
 
@@ -300,6 +304,7 @@ async function requestNearbyTramStops({
           desc: place.desc,
           lat: place.lat,
           lon: place.lon,
+          vehicleMode: place.vehicleMode,
           distance: edge.node.distance ?? Number.POSITIVE_INFINITY,
         },
       ];
@@ -309,6 +314,10 @@ async function requestNearbyTramStops({
 
 function isNearbyStopPlace(place: NearbyPlace | null): place is NearbyStopPlace {
   return Boolean(place && place.__typename === "Stop");
+}
+
+function isTransitMode(value: string | null): value is TransitMode {
+  return NEARBY_TRANSIT_MODES.some((mode) => mode === value);
 }
 
 function getDominantHeadsign(

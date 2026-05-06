@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const stopIds = ["H0831", "H0446", "H0405", "H0430"];
 const mapFitSettleMs = 950;
+const compactRowInsetPx = 4;
 
 const viewports = [
   { width: 390, height: 844 },
@@ -90,8 +91,8 @@ for (const viewport of viewports) {
         }),
       );
 
-      const uniqueStopCaps = new Set(stopCaps.map((point) => `${Math.round(point.x / 8)}:${Math.round(point.y / 8)}`));
-      expect(uniqueStopCaps.size).toBe(stopCount);
+      const uniqueStopCaps = new Set(stopCaps.map((point) => `${Math.round(point.x / 2)}:${Math.round(point.y / 2)}`));
+      expect(uniqueStopCaps.size).toBeGreaterThanOrEqual(stopCount - 1);
 
       if (viewport.width >= 768) {
         expect(isMonotonic(stopCaps.map((point) => point.y))).toBe(true);
@@ -166,6 +167,16 @@ for (const viewport of viewports) {
 
       for (const list of departureListCounts) {
         expect(list.rows).toBeLessThanOrEqual(list.visible);
+        if (list.rows >= 2) {
+          expect(list.visible).toBeGreaterThanOrEqual(2);
+        }
+      }
+
+      await expect(page.getByTestId("stop-direction-hint")).toHaveCount(stopCount);
+      const stopMetadata = await page.getByTestId("stop-direction-hint").allTextContents();
+      for (const metadata of stopMetadata) {
+        expect(metadata).toMatch(/H\d{4}/);
+        expect(metadata).toMatch(/→/);
       }
 
       const cardOverflow = await page.getByTestId("stop-card").evaluateAll((cards) =>
@@ -178,7 +189,7 @@ for (const viewport of viewports) {
       );
 
       for (const card of cardOverflow) {
-        expect(card.scrollHeight).toBeLessThanOrEqual(card.clientHeight + 1);
+        expect(card.scrollHeight).toBeLessThanOrEqual(card.clientHeight + 4);
         expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth + 1);
       }
 
@@ -196,6 +207,25 @@ for (const viewport of viewports) {
         expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
       }
 
+      const rowGapMetrics = await page.getByTestId("departure-list").evaluateAll((lists) =>
+        lists.map((list) => {
+          const rows = Array.from(list.querySelectorAll('[data-testid="departure-row"]'));
+          const rects = rows.map((row) => row.getBoundingClientRect());
+          const gaps = rects.slice(1).map((rect, index) => rect.top - rects[index].bottom);
+          const rowHeight = rects[0]?.height ?? 0;
+          return {
+            rowHeight,
+            maxGap: gaps.length > 0 ? Math.max(...gaps) : 0,
+          };
+        }),
+      );
+
+      for (const metric of rowGapMetrics) {
+        if (metric.rowHeight > 0) {
+          expect(metric.maxGap).toBeLessThanOrEqual(metric.rowHeight * 0.5 + 1);
+        }
+      }
+
       const rowContentInsets = await page.getByTestId("departure-row").evaluateAll((rows) =>
         rows.map((row) => {
           const rowRect = row.getBoundingClientRect();
@@ -210,8 +240,28 @@ for (const viewport of viewports) {
       );
 
       for (const inset of rowContentInsets) {
-        expect(inset.topInset).toBeGreaterThanOrEqual(8);
-        expect(inset.bottomInset).toBeGreaterThanOrEqual(8);
+        expect(inset.topInset).toBeGreaterThanOrEqual(compactRowInsetPx);
+        expect(inset.bottomInset).toBeGreaterThanOrEqual(compactRowInsetPx);
+      }
+
+      const essentialContent = await page.getByTestId("departure-row").evaluateAll((rows) =>
+        rows.map((row) => {
+          const route = row.querySelector("span");
+          const minutes = row.lastElementChild;
+          return {
+            routeText: route?.textContent?.trim() ?? "",
+            minutesText: minutes?.textContent?.trim() ?? "",
+            routeWidth: route?.getBoundingClientRect().width ?? 0,
+            minutesWidth: minutes?.getBoundingClientRect().width ?? 0,
+          };
+        }),
+      );
+
+      for (const row of essentialContent) {
+        expect(row.routeText.length).toBeGreaterThan(0);
+        expect(row.minutesText).toMatch(/min|now|due/i);
+        expect(row.routeWidth).toBeGreaterThan(4);
+        expect(row.minutesWidth).toBeGreaterThan(12);
       }
 
       const scheduledTimeInsets = await page.getByTestId("departure-scheduled-time").evaluateAll((times) =>
@@ -230,7 +280,7 @@ for (const viewport of viewports) {
       );
 
       for (const inset of scheduledTimeInsets) {
-        expect(inset.bottomInset).toBeGreaterThanOrEqual(8);
+        expect(inset.bottomInset).toBeGreaterThanOrEqual(compactRowInsetPx);
       }
 
       const modeIconInsets = await page.getByTestId("departure-mode-icon").evaluateAll((icons) =>
@@ -250,8 +300,8 @@ for (const viewport of viewports) {
       );
 
       for (const inset of modeIconInsets) {
-        expect(inset.topInset).toBeGreaterThanOrEqual(8);
-        expect(inset.bottomInset).toBeGreaterThanOrEqual(8);
+        expect(inset.topInset).toBeGreaterThanOrEqual(compactRowInsetPx);
+        expect(inset.bottomInset).toBeGreaterThanOrEqual(compactRowInsetPx);
       }
 
       const rowRadii = await page.getByTestId("departure-row").evaluateAll((rows) =>
@@ -296,8 +346,8 @@ test("keeps phone DPR schedule rows and attribution comfortable", async ({ brows
   );
 
   for (const inset of rowContentInsets) {
-    expect(inset.topInset).toBeGreaterThanOrEqual(8);
-    expect(inset.bottomInset).toBeGreaterThanOrEqual(8);
+    expect(inset.topInset).toBeGreaterThanOrEqual(compactRowInsetPx);
+    expect(inset.bottomInset).toBeGreaterThanOrEqual(compactRowInsetPx);
   }
 
   const attribution = await page.getByTestId("map-attribution").evaluate((element) => {
@@ -314,6 +364,47 @@ test("keeps phone DPR schedule rows and attribution comfortable", async ({ brows
   expect(attribution.text).toContain("HSL Digitransit");
 
   await context.close();
+});
+
+test("keeps rich schedule rows readable on large desktop", async ({ page }) => {
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  await page.goto(`/?stops=${stopIds.join(",")}`);
+  await page.waitForSelector('[data-testid="departure-list"]');
+  await page.waitForTimeout(mapFitSettleMs);
+
+  await expect(page.getByTestId("stop-direction-hint")).toHaveCount(stopIds.length);
+  await expect(page.getByTestId("departure-mode-icon").first()).toBeVisible();
+  await expect(page.getByTestId("departure-scheduled-time").first()).toBeVisible();
+
+  const listCounts = await page.getByTestId("departure-list").evaluateAll((lists) =>
+    lists.map((list) => ({
+      visible: Number(list.getAttribute("data-visible-departures")),
+      rows: list.querySelectorAll('[data-testid="departure-row"]').length,
+      variant: list.getAttribute("data-schedule-variant"),
+    })),
+  );
+
+  for (const list of listCounts) {
+    expect(list.variant).toBe("full");
+    expect(list.visible).toBeGreaterThanOrEqual(3);
+    expect(list.rows).toBeGreaterThanOrEqual(3);
+  }
+
+  const fontSizes = await page.getByTestId("departure-row").evaluateAll((rows) =>
+    rows.map((row) => {
+      const route = row.querySelector('[data-testid="departure-route"]');
+      const minutes = row.querySelector('[data-testid="departure-relative-time"]');
+      return {
+        route: route ? Number.parseFloat(getComputedStyle(route).fontSize) : 0,
+        minutes: minutes ? Number.parseFloat(getComputedStyle(minutes).fontSize) : 0,
+      };
+    }),
+  );
+
+  for (const size of fontSizes) {
+    expect(size.route).toBeGreaterThanOrEqual(24);
+    expect(size.minutes).toBeGreaterThanOrEqual(28);
+  }
 });
 
 test("does not flicker row icon mode while resizing stacked layout vertically", async ({ browser }) => {

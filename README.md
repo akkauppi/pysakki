@@ -1,10 +1,10 @@
-# Pysakki
+# ratikka.sankari.fi
 
 Serverless Helsinki public transport map built with Vite, React, TypeScript, MapLibre GL JS, Digitransit GraphQL, and HSL realtime MQTT.
 
 ## What This Is
 
-Pysakki is a small browser-based kiosk view for Helsinki public transport. The goal is simple: show a few selected stops, upcoming departures, and the nearby live map clearly on one screen.
+ratikka.sankari.fi is a small browser-based kiosk view for Helsinki public transport. The goal is simple: show a few selected departures, upcoming times, and the nearby live map clearly on one screen.
 
 This project was built iteratively and, to be frank, somewhat vibe-coded. It works, it is useful, and it has been shaped directly by real-world testing on the target display, but it should still be treated as a lightweight personal project rather than a polished transit product.
 
@@ -13,15 +13,24 @@ If you use it, please expect some rough edges, and please be kind if you open is
 ## Current Focus
 
 - single-screen kiosk display
-- a few selected HSL stops at once
+- selected HSL bus, tram, train, and metro departures
 - large, readable departure information
 - map context with realtime vehicles
+- first-run setup and later stop editing directly in the browser
 
 ## Project Status
 
 - built for a practical real display, not as a generic framework
 - intentionally small and dependency-light
 - still evolving through hands-on use rather than formal product planning
+
+## Using The App
+
+On first run, the app opens a setup flow instead of assuming default choices. You can use browser location to pick nearby departures, or choose manually from the map. The app stores the selected stop references and viewport in browser local storage after you press Done.
+
+The in-app menu shows the current realtime status, viewport, selected references, and share URL. From there you can edit selections, copy the current link, or reset choices. Reset clears the saved browser configuration and returns to first-run setup.
+
+Edit mode can refresh nearby bus, tram, train, and metro suggestions for the current map center, add the nearest transit stop when you tap the map, remove selected entries, cancel back to the previous saved choices, or save the edited choices into local storage and the URL.
 
 ## License
 
@@ -83,7 +92,7 @@ npx playwright install chromium
 - `zoom`: map zoom level
 - `stops`: comma-separated stop references, using either GTFS IDs like `HSL:1040129` or HSL stop codes like `H0831`
 
-If URL parameters are present, they override browser-saved configuration. If `stops` is omitted, the app uses browser-saved stops when available; otherwise it opens the first-run setup flow for choosing nearby tram stops.
+URL parameters override browser-saved configuration independently: `stops` overrides saved selections, and any of `lat`, `lon`, or `zoom` overrides the saved viewport. If `stops` is omitted, the app uses browser-saved selections when available; otherwise it opens the first-run setup flow for choosing nearby departures.
 
 Example:
 
@@ -97,7 +106,10 @@ The in-app menu and edit mode include a copy-link action that creates a shareabl
 
 - The app fetches the HSL map style from the public `hsl-map-style` repository and rewrites Digitransit tile URLs with the configured API key.
 - Realtime vehicle positions are consumed directly in the browser from `wss://mqtt.hsl.fi:443/`.
-- The schedule cards are intentionally capacity-aware: dense 3-4 stop layouts on small or unusual screens show fewer departures rather than clipping content.
-- Leader-line behavior is covered by Playwright smoke tests across small portrait, small landscape, and desktop-ish viewport sizes.
+- Stop departure lists exclude Digitransit rows where boarding is not allowed.
+- Duplicate or ambiguous stop names can show a compact direction hint based on the dominant upcoming headsign.
+- The schedule cards are intentionally capacity-aware: dense 3-4 selection layouts on small or unusual screens simplify row details before clipping content.
+- On tall stacked layouts with 3-4 stops, cards can split between top and bottom boards so leader lines do not cross.
+- Leader-line and setup/edit behavior is covered by Playwright smoke tests across small portrait, small landscape, and desktop-ish viewport sizes.
 - If Digitransit tightens key or CORS requirements, the style and GraphQL requests may need updated credentials or endpoint configuration.
 - Attribution and data licenses from HSL Digitransit, OpenMapTiles, and OpenStreetMap must be kept visible in the UI.

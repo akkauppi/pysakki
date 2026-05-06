@@ -67,7 +67,7 @@ test("reset choices clears saved config and returns to first-run setup", async (
   expect(savedConfig).toBeNull();
 });
 
-test("location setup selects nearby tram stops and saves a shareable URL", async ({ browser }) => {
+test("location setup selects nearby mixed transit and saves a shareable URL", async ({ browser }) => {
   const context = await browser.newContext({
     geolocation: { latitude: 60.1701, longitude: 24.9412 },
     permissions: ["geolocation"],
@@ -77,7 +77,8 @@ test("location setup selects nearby tram stops and saves a shareable URL", async
   await page.addInitScript(() => window.localStorage.clear());
   await page.route("**/routing/v2/hsl/gtfs/v1", async (route) => {
     const request = route.request().postDataJSON() as { query?: string; variables?: { id?: string } };
-    if (request.query?.includes("NearbyTramStops")) {
+    if (request.query?.includes("NearbyTransitStops")) {
+      const modes = ["BUS", "TRAM", "RAIL", "SUBWAY"] as const;
       await route.fulfill({
         json: {
           data: {
@@ -88,12 +89,12 @@ test("location setup selects nearby tram stops and saves a shareable URL", async
                   place: {
                     __typename: "Stop",
                     gtfsId,
-                    name: `Tram stop ${index + 1}`,
+                    name: `Transit ${index + 1}`,
                     code: `T${index + 1}`,
                     desc: null,
                     lat: 60.1701 + index * 0.0001,
                     lon: 24.9412 + index * 0.0001,
-                    vehicleMode: "TRAM",
+                    vehicleMode: modes[index],
                   },
                 },
               })),
