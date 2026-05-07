@@ -73,11 +73,23 @@ Run the production build check:
 npm run build
 ```
 
-Run the Playwright layout smoke tests:
+Run lint:
+
+```bash
+npm run lint
+```
+
+Run the focused Playwright smoke tests:
 
 ```bash
 npm run test:e2e
 ```
+
+The browser suite keeps cheap unit-style coverage for URL state, departure
+filtering, and stacked layout metrics, then uses a smaller set of UI checks for
+the risky pieces: 2-stop phone stacking, 3-4 stop split stacking, a short phone,
+a landscape weird viewport, desktop leader attachment, first-run/edit flows, and
+the delayed map reset after manual interaction.
 
 If Playwright browsers are missing locally, install Chromium once:
 
@@ -109,7 +121,9 @@ The in-app menu and edit mode include a copy-link action that creates a shareabl
 - Stop departure lists exclude Digitransit rows where boarding is not allowed.
 - Duplicate or ambiguous stop names can show a compact direction hint based on the dominant upcoming headsign.
 - The schedule cards are intentionally capacity-aware: dense 3-4 selection layouts on small or unusual screens simplify row details before clipping content.
+- On stacked layouts, the map intentionally gets most of the screen: roughly 60-65% for 1-2 stop phones, and roughly 55-60% for split 3-4 stop phones after panel chrome and gaps.
 - On tall stacked layouts with 3-4 stops, cards can split between top and bottom boards so leader lines do not cross.
-- Leader-line and setup/edit behavior is covered by Playwright smoke tests across small portrait, small landscape, and desktop-ish viewport sizes.
+- The app fits selected stops automatically when the initial selection or layout changes. After manual map pan or zoom, automatic fitting pauses and returns slowly after about five seconds of map idle time.
+- Leader-line, layout, and setup/edit behavior is covered by Playwright smoke tests across small portrait, small landscape, and desktop-ish viewport sizes.
 - If Digitransit tightens key or CORS requirements, the style and GraphQL requests may need updated credentials or endpoint configuration.
 - Attribution and data licenses from HSL Digitransit, OpenMapTiles, and OpenStreetMap must be kept visible in the UI.

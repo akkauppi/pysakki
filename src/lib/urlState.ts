@@ -11,7 +11,6 @@ export const DEFAULT_VIEWPORT: ViewportState = {
 };
 
 export const MAX_STOP_COUNT = 4;
-export const DEFAULT_STOP_IDS = ["H0831", "H0446"];
 
 export function parseUrlState(search: string) {
   const params = new URLSearchParams(search);

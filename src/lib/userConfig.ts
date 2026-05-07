@@ -17,9 +17,6 @@ export type SavedUserConfigV1 = {
 export type ResolvedUserConfig = {
   stopIds: string[];
   viewport: ViewportState;
-  hasSavedConfig: boolean;
-  hasUrlStops: boolean;
-  hasUrlViewport: boolean;
 };
 
 export function resolveInitialUserConfig(search: string): ResolvedUserConfig {
@@ -33,9 +30,6 @@ export function resolveInitialUserConfig(search: string): ResolvedUserConfig {
     viewport: urlState.explicit.hasViewport
       ? urlState.viewport
       : savedConfig?.viewport ?? DEFAULT_VIEWPORT,
-    hasSavedConfig: Boolean(savedConfig),
-    hasUrlStops: urlState.explicit.hasStops,
-    hasUrlViewport: urlState.explicit.hasViewport,
   };
 }
 

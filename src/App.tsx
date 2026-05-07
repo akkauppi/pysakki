@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Feature, FeatureCollection, Point } from "geojson";
 import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
 import {
@@ -33,6 +33,20 @@ import {
   type ViewportState,
 } from "./lib/urlState";
 import {
+  buildLeaderRibbon,
+  getLeaderId,
+  getLeaderRibbonWidths,
+  toSvgId,
+  type LeaderCardAnchorSide,
+} from "./lib/leaderRibbon";
+import {
+  getAppGridStyle,
+  getScheduleFit,
+  getScheduleScaleStyle,
+  getStopBoardLayout,
+  type ScheduleRowVariant,
+} from "./lib/scheduleLayout";
+import {
   clearUserConfig,
   resolveInitialUserConfig,
   saveUserConfig,
@@ -55,6 +69,7 @@ const STOP_REFRESH_INTERVAL_MS = 60_000;
 const STOP_REFRESH_MIN_INTERVAL_MS = 15_000;
 const GEOLOCATION_TIMEOUT_MS = 10_000;
 const LOCATION_ZOOM = 15.8;
+const MAP_USER_IDLE_REFIT_MS = 5_000;
 type LeaderRibbon = {
   id: string;
   svgId: string;
@@ -67,13 +82,6 @@ type LeaderRibbon = {
   cardY: number;
   stopRadius: number;
 };
-
-type ScreenPoint = {
-  x: number;
-  y: number;
-};
-
-type LeaderCardAnchorSide = "right" | "top" | "bottom";
 
 type Departure = StopWithDepartures["departures"][number];
 type EditBaseline = {
@@ -125,14 +133,23 @@ export default function App() {
   });
   const vehicleFrameRef = useRef<number | null>(null);
   const leaderLineFrameRef = useRef<number | null>(null);
+  const mapProgrammaticMoveRef = useRef(false);
+  const userMapInteractionRef = useRef(false);
+  const mapIdleRefitTimerRef = useRef<number | null>(null);
+  const latestStopBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
+  const lastAutoFitKeyRef = useRef<string | null>(null);
   const vehiclesRef = useRef<Map<string, VehicleSnapshot>>(new Map());
   const stopCardRefs = useRef(new Map<string, HTMLElement>());
   const lastStopRefreshAtRef = useRef(0);
   const previousScheduleRowVariantRef = useRef<ScheduleRowVariant>("compact");
+  const mapFitLayoutRef = useRef({
+    isStackedLayout: false,
+    splitStackedSchedules: false,
+  });
 
   const vehicleMqttTopics = useMemo(
     () => getVehicleMqttTopics(vehicleBounds),
-    [vehicleBounds.north, vehicleBounds.south, vehicleBounds.east, vehicleBounds.west],
+    [vehicleBounds],
   );
   const { vehicles, status: vehicleStreamStatus } = useVehicleStream(vehicleMqttTopics);
   const digitransitApiKeyConfigured = Boolean(import.meta.env.VITE_DIGITRANSIT_API_KEY);
@@ -164,6 +181,7 @@ export default function App() {
     overlaySize,
     previousScheduleRowVariantRef.current,
     hasDirectionHints,
+    splitStackedSchedules,
   );
   previousScheduleRowVariantRef.current = scheduleFit.rowVariant;
   const visibleDepartureCount = scheduleFit.visibleCount;
@@ -176,7 +194,54 @@ export default function App() {
   const emptySchedule = visibleDepartureCount === 0;
   const scheduleScale = scheduleFit.scale;
   const scheduleScaleStyle = getScheduleScaleStyle(scheduleFit, compactSchedule);
+  const appGridStyle = getAppGridStyle({
+    isStackedLayout,
+    screenSize: overlaySize,
+    splitStackedSchedules,
+    stopCount: displayStops.length,
+  });
   const shareUrl = getShareUrl(viewport, stopIds);
+
+  mapFitLayoutRef.current = {
+    isStackedLayout,
+    splitStackedSchedules,
+  };
+
+  const clearPendingMapRefit = useCallback(() => {
+    if (mapIdleRefitTimerRef.current !== null) {
+      window.clearTimeout(mapIdleRefitTimerRef.current);
+      mapIdleRefitTimerRef.current = null;
+    }
+  }, []);
+
+  const fitLatestStopBounds = useCallback((duration: number) => {
+    const map = mapRef.current;
+    const bounds = latestStopBoundsRef.current;
+    if (!map || !bounds || setupModeRef.current || editModeRef.current) {
+      return;
+    }
+
+    mapProgrammaticMoveRef.current = true;
+    window.dispatchEvent(new CustomEvent("pysakki-map-fit", { detail: { duration } }));
+    map.fitBounds(bounds, {
+      padding: getMapFitPadding(
+        map,
+        mapFitLayoutRef.current.isStackedLayout,
+        mapFitLayoutRef.current.splitStackedSchedules,
+      ),
+      maxZoom: 17.6,
+      duration,
+    });
+  }, []);
+
+  const scheduleIdleMapRefit = useCallback(() => {
+    clearPendingMapRefit();
+    mapIdleRefitTimerRef.current = window.setTimeout(() => {
+      mapIdleRefitTimerRef.current = null;
+      userMapInteractionRef.current = false;
+      fitLatestStopBounds(2_800);
+    }, MAP_USER_IDLE_REFIT_MS);
+  }, [clearPendingMapRefit, fitLatestStopBounds]);
 
   useEffect(() => {
     vehiclesRef.current = vehicles;
@@ -400,7 +465,52 @@ export default function App() {
         };
 
         updateMapViewport();
-        map.on("moveend", updateMapViewport);
+        const markUserMapInteraction = (event: { originalEvent?: Event }) => {
+          if (!event.originalEvent || mapProgrammaticMoveRef.current) {
+            return;
+          }
+
+          userMapInteractionRef.current = true;
+          clearPendingMapRefit();
+        };
+        const markDomUserMapInteraction = () => {
+          if (mapProgrammaticMoveRef.current) {
+            return;
+          }
+
+          userMapInteractionRef.current = true;
+          clearPendingMapRefit();
+        };
+        const handleDomUserInteractionEnd = () => {
+          if (!userMapInteractionRef.current || mapProgrammaticMoveRef.current) {
+            return;
+          }
+
+          scheduleIdleMapRefit();
+        };
+
+        const handleMapMoveEnd = (event: { originalEvent?: Event }) => {
+          updateMapViewport();
+
+          if (mapProgrammaticMoveRef.current) {
+            mapProgrammaticMoveRef.current = false;
+            return;
+          }
+
+          if (event.originalEvent || userMapInteractionRef.current) {
+            userMapInteractionRef.current = false;
+            scheduleIdleMapRefit();
+          }
+        };
+
+        map.on("movestart", markUserMapInteraction);
+        map.on("dragstart", markUserMapInteraction);
+        map.on("zoomstart", markUserMapInteraction);
+        map.on("moveend", handleMapMoveEnd);
+        map.getCanvas().addEventListener("pointerdown", markDomUserMapInteraction);
+        map.getCanvas().addEventListener("pointerup", handleDomUserInteractionEnd);
+        map.getCanvas().addEventListener("wheel", markDomUserMapInteraction);
+        map.getCanvas().addEventListener("wheel", handleDomUserInteractionEnd);
 
         mapRef.current = map;
       } catch (error) {
@@ -422,13 +532,14 @@ export default function App() {
       if (leaderLineFrameRef.current !== null) {
         window.cancelAnimationFrame(leaderLineFrameRef.current);
       }
+      clearPendingMapRefit();
       vehicleSourceRef.current = null;
       stopSourceRef.current = null;
       setMapReady(false);
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [clearPendingMapRefit, scheduleIdleMapRefit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -537,22 +648,17 @@ export default function App() {
     stopSourceRef.current.setData(data);
 
     if (stops.length > 0 && mapRef.current && !setupMode && !editMode) {
-      const bounds = new maplibregl.LngLatBounds(
-        [stops[0].lon, stops[0].lat],
-        [stops[0].lon, stops[0].lat],
-      );
+      const bounds = getStopBounds(stops);
+      const fitKey = getStopFitKey(stops, isStackedLayout, splitStackedSchedules);
+      latestStopBoundsRef.current = bounds;
 
-      for (const stop of stops.slice(1)) {
-        bounds.extend([stop.lon, stop.lat]);
+      if (fitKey !== lastAutoFitKeyRef.current) {
+        lastAutoFitKeyRef.current = fitKey;
+        clearPendingMapRefit();
+        fitLatestStopBounds(900);
       }
-
-      mapRef.current.fitBounds(bounds, {
-        padding: getMapFitPadding(mapRef.current, isStackedLayout, splitStackedSchedules),
-        maxZoom: 17.6,
-        duration: 900,
-      });
     }
-  }, [displayStops, editMode, isStackedLayout, mapReady, setupMode, splitStackedSchedules, stops]);
+  }, [clearPendingMapRefit, displayStops, editMode, fitLatestStopBounds, isStackedLayout, mapReady, setupMode, splitStackedSchedules, stops]);
 
   useEffect(() => {
     if (!mapReady || !vehicleSourceRef.current) {
@@ -702,7 +808,7 @@ export default function App() {
         leaderLineFrameRef.current = null;
       }
     };
-  }, [displayStops, mapReady]);
+  }, [displayStops, mapReady, stops.length]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || !editMode) {
@@ -1042,6 +1148,7 @@ export default function App() {
             ? "grid-rows-[minmax(0,0.95fr)_minmax(0,0.85fr)_minmax(0,0.95fr)]"
             : "grid-rows-[minmax(0,1.65fr)_minmax(0,0.75fr)]",
         )}
+        style={appGridStyle}
       >
         <section className="relative z-30 min-h-0 overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/72 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md md:rounded-[2rem]">
           <div className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent md:block" />
@@ -1121,6 +1228,7 @@ export default function App() {
         </section>
 
         <main
+          data-testid="map-shell"
           ref={mapShellRef}
           className="relative z-10 min-h-0 overflow-hidden rounded-[2rem] border border-white/10 bg-slate-950/68 shadow-[0_24px_80px_rgba(2,6,23,0.5)]"
         >
@@ -1895,6 +2003,31 @@ function getDepartureKey(stopId: string, departure: Departure) {
   ].join("-");
 }
 
+function getStopBounds(stops: StopWithDepartures[]) {
+  const bounds = new maplibregl.LngLatBounds(
+    [stops[0].lon, stops[0].lat],
+    [stops[0].lon, stops[0].lat],
+  );
+
+  for (const stop of stops.slice(1)) {
+    bounds.extend([stop.lon, stop.lat]);
+  }
+
+  return bounds;
+}
+
+function getStopFitKey(
+  stops: StopWithDepartures[],
+  isStackedLayout: boolean,
+  splitStackedSchedules: boolean,
+) {
+  return [
+    isStackedLayout ? "stacked" : "desktop",
+    splitStackedSchedules ? "split" : "single",
+    ...stops.map((stop) => `${stop.gtfsId}:${stop.lat.toFixed(5)}:${stop.lon.toFixed(5)}`),
+  ].join("|");
+}
+
 function getMapFitPadding(
   map: MapLibreMap,
   isStackedLayout: boolean,
@@ -1923,343 +2056,6 @@ function getMapFitPadding(
     bottom: vertical,
     left: horizontal,
   };
-}
-
-type ScheduleRowVariant = "full" | "compactIcon" | "compact";
-
-type ScheduleFit = {
-  visibleCount: number;
-  scale: number;
-  contentScale: number;
-  rowVariant: ScheduleRowVariant;
-  rowHeight: number;
-};
-
-function getScheduleFit(
-  stopCount: number,
-  maxDepartureCount: number,
-  isStackedLayout: boolean,
-  screenSize: { width: number; height: number },
-  previousRowVariant: ScheduleRowVariant,
-  hasDirectionHints: boolean,
-): ScheduleFit {
-  const minScale = isStackedLayout ? 0.88 : stopCount >= 4 && screenSize.height < 720 ? 0.86 : stopCount >= 3 && screenSize.height < 720 ? 0.9 : 0.96;
-  const maxScale = isStackedLayout ? 1.22 : 1.34;
-  const minComfortInset = isStackedLayout ? 4 : stopCount >= 4 && screenSize.height < 720 ? 3 : stopCount >= 3 ? 4 : 8;
-  const boardHeight = isStackedLayout
-    ? screenSize.height * (screenSize.height < screenSize.width ? 0.34 : 0.43)
-    : screenSize.height - 118;
-  const layoutRows = isStackedLayout ? (stopCount <= 2 ? 1 : 2) : Math.max(stopCount, 1);
-  const cardHeight = boardHeight / Math.max(layoutRows, 1) - getScheduleCardSafetyReserve(stopCount, isStackedLayout);
-  const maxDepartureCountForViewport = !isStackedLayout && stopCount >= 3 && screenSize.height < 720
-    ? Math.min(maxDepartureCount, 2)
-    : maxDepartureCount;
-  const maxCandidate = Math.max(0, maxDepartureCountForViewport);
-  const minVisibleCount = Math.min(maxCandidate, maxCandidate >= 2 ? 2 : 1);
-  const widthScale = screenSize.width < 390 ? 0.98 : 1;
-  const variants = getScheduleVariantPriority(stopCount, isStackedLayout, screenSize.height, previousRowVariant);
-
-  if (maxCandidate === 0) {
-    return {
-      visibleCount: 0,
-      scale: minScale,
-      contentScale: minScale,
-      rowVariant: "compact",
-      rowHeight: 0,
-    };
-  }
-
-  for (let visibleCount = maxCandidate; visibleCount >= minVisibleCount; visibleCount -= 1) {
-    const headerReserve = getScheduleHeaderReserve(stopCount, visibleCount, hasDirectionHints);
-    const rowGap = getScheduleBaseListGap(visibleCount);
-    const rowBudget = (cardHeight - headerReserve - rowGap * Math.max(0, visibleCount - 1)) / visibleCount;
-    const targetRowHeight = getScheduleTargetRowHeight(visibleCount);
-    const rowHeight = Math.min(rowBudget, targetRowHeight * maxScale);
-
-    for (const rowVariant of variants) {
-      if (rowBudget >= getScheduleMinimumRowHeight(visibleCount, rowVariant, minComfortInset)) {
-        const resolvedScale = clamp(rowHeight / targetRowHeight, minScale, maxScale);
-        return {
-          visibleCount,
-          scale: resolvedScale,
-          contentScale: clamp(resolvedScale * widthScale, minScale, maxScale),
-          rowVariant,
-          rowHeight,
-        };
-      }
-    }
-  }
-
-  const fallbackHeaderReserve = getScheduleHeaderReserve(stopCount, minVisibleCount, hasDirectionHints);
-  const fallbackRowGap = getScheduleBaseListGap(minVisibleCount);
-  const fallbackRowBudget = Math.max(
-    getScheduleMinimumRowHeight(minVisibleCount, "compact", minComfortInset),
-    (cardHeight - fallbackHeaderReserve - fallbackRowGap * Math.max(0, minVisibleCount - 1)) / Math.max(1, minVisibleCount),
-  );
-  const fallbackTargetHeight = getScheduleTargetRowHeight(minVisibleCount);
-  const fallbackScale = clamp(fallbackRowBudget / fallbackTargetHeight, minScale, maxScale);
-
-  return {
-    visibleCount: minVisibleCount,
-    scale: fallbackScale,
-    contentScale: clamp(fallbackScale * widthScale, minScale, maxScale),
-    rowVariant: "compact",
-    rowHeight: fallbackRowBudget,
-  };
-}
-
-function getScheduleVariantPriority(
-  stopCount: number,
-  isStackedLayout: boolean,
-  screenHeight: number,
-  previousRowVariant: ScheduleRowVariant,
-): ScheduleRowVariant[] {
-  if (!isStackedLayout) {
-    if (screenHeight >= 900) {
-      return ["full"];
-    }
-
-    if (stopCount >= 3 && screenHeight < 720) {
-      return ["compact"];
-    }
-
-    return ["full", "compactIcon", "compact"];
-  }
-
-  if (stopCount >= 3 || screenHeight < 720) {
-    return ["compact"];
-  }
-
-  if (screenHeight >= 760 || previousRowVariant === "compactIcon" || previousRowVariant === "full") {
-    return stopCount >= 4 ? ["compact", "compactIcon"] : ["compactIcon", "compact"];
-  }
-
-  return ["compact"];
-}
-
-function getScheduleScaleStyle(
-  fit: ScheduleFit,
-  compactSchedule: boolean,
-): CSSProperties {
-  const { scale, contentScale, rowVariant, rowHeight, visibleCount } = fit;
-  const hasIcon = rowVariant !== "compact";
-  const rowPadX = hasIcon ? (compactSchedule ? 9 : 12) : 8;
-  const rowPadY = hasIcon ? (compactSchedule ? 7 : 13) : 4;
-  const iconSize = compactSchedule ? 34 : 48;
-  const modeIconSize = compactSchedule ? 22 : 28;
-  const rowGap = hasIcon ? (compactSchedule ? 8 : 12) : 8;
-  const listGap = hasIcon ? (compactSchedule ? 6 : 8) : 6;
-  const resolvedRowHeight = rowVariant === "compact" ? Math.min(rowHeight, 48) : rowHeight;
-  const comfortableIconSize = Math.max(0, rowHeight - 14);
-  const resolvedIconSize = Math.min(Math.max(24, Math.round(iconSize * contentScale)), comfortableIconSize);
-  const maxRowRadius = rowVariant === "compact" ? 12 : compactSchedule ? 14 : 18;
-
-  return {
-    gap: `${Math.max(3, Math.round(listGap * scale))}px`,
-    gridTemplateRows: visibleCount > 0 ? `repeat(${visibleCount}, var(--schedule-row-height))` : undefined,
-    alignContent: "start",
-    "--schedule-row-gap": `${Math.max(4, Math.round(rowGap * scale))}px`,
-    "--schedule-row-px": `${Math.max(8, Math.round(rowPadX * scale))}px`,
-    "--schedule-row-py": `${Math.max(hasIcon ? 6 : 4, Math.round(rowPadY * scale))}px`,
-    "--schedule-row-radius": `${Math.max(6, Math.min(maxRowRadius, Math.round(resolvedRowHeight * 0.3)))}px`,
-    "--schedule-icon-radius": `${Math.max(10, Math.round(16 * contentScale))}px`,
-    "--schedule-icon-size": `${Math.round(resolvedIconSize)}px`,
-    "--schedule-mode-icon-size": `${Math.max(16, Math.round(modeIconSize * contentScale))}px`,
-    "--schedule-route-size": `${(hasIcon ? (compactSchedule ? 1.42 * contentScale : 1.72 * contentScale) : 1.34 * contentScale).toFixed(3)}rem`,
-    "--schedule-headsign-size": `${(hasIcon ? (compactSchedule ? 0.86 * contentScale : 0.94 * contentScale) : 0.82 * contentScale).toFixed(3)}rem`,
-    "--schedule-time-size": `${(compactSchedule ? 0.72 * contentScale : 0.78 * contentScale).toFixed(3)}rem`,
-    "--schedule-relative-size": `${(hasIcon ? (compactSchedule ? 1.54 * contentScale : 2.0 * contentScale) : 1.42 * contentScale).toFixed(3)}rem`,
-    "--schedule-time-mt": `${Math.max(2, Math.round(4 * contentScale))}px`,
-    "--schedule-time-tracking": compactSchedule ? "0.12em" : "0.18em",
-    "--schedule-row-height": `${Math.max(hasIcon ? 44 : 30, Math.round(resolvedRowHeight))}px`,
-  } as CSSProperties;
-}
-
-function getScheduleHeaderReserve(stopCount: number, visibleCount: number, hasDirectionHints: boolean) {
-  const directionReserve = hasDirectionHints && stopCount < 3 ? 14 : 0;
-  if (visibleCount <= 1) {
-    return (stopCount >= 3 ? 26 : 48) + directionReserve;
-  }
-
-  return (stopCount >= 3 ? 30 : 64) + directionReserve;
-}
-
-function getScheduleCardSafetyReserve(stopCount: number, isStackedLayout: boolean) {
-  if (isStackedLayout) {
-    return stopCount >= 3 ? 8 : 14;
-  }
-
-  if (stopCount >= 4) {
-    return 24;
-  }
-
-  return stopCount >= 3 ? 14 : 18;
-}
-
-function getScheduleBaseListGap(visibleCount: number) {
-  if (visibleCount <= 1) {
-    return 4;
-  }
-
-  return visibleCount <= 2 ? 6 : 8;
-}
-
-function getScheduleTargetRowHeight(visibleCount: number) {
-  if (visibleCount <= 1) {
-    return 54;
-  }
-
-  return visibleCount <= 2 ? 58 : 76;
-}
-
-function getScheduleMinimumRowHeight(
-  visibleCount: number,
-  rowVariant: ScheduleRowVariant,
-  minComfortInset: number,
-) {
-  if (rowVariant === "full") {
-    return (visibleCount <= 2 ? 54 : 58) + minComfortInset * 2;
-  }
-
-  if (rowVariant === "compactIcon") {
-    return (visibleCount <= 2 ? 42 : 46) + minComfortInset * 2;
-  }
-
-  return 24 + minComfortInset * 2;
-}
-
-function getStopBoardLayout(stopCount: number, isStackedLayout: boolean) {
-  if (!isStackedLayout) {
-    return {
-      gridTemplateRows: `repeat(${Math.max(stopCount, 1)}, minmax(0, 1fr))`,
-    };
-  }
-
-  if (stopCount <= 1) {
-    return {
-      gridTemplateColumns: "minmax(0, 1fr)",
-      gridTemplateRows: "minmax(0, 1fr)",
-    };
-  }
-
-  if (stopCount === 2) {
-    return {
-      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-      gridTemplateRows: "minmax(0, 1fr)",
-    };
-  }
-
-  return {
-    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-    gridTemplateRows: "repeat(2, minmax(0, 1fr))",
-  };
-}
-
-function getLeaderId(stop: StopWithDepartures, index: number) {
-  return `${stop.gtfsId}-${index}`;
-}
-
-function toSvgId(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, "-");
-}
-
-function getLeaderRibbonWidths(stopCount: number, isStackedLayout: boolean, screenWidth: number) {
-  const densityScale = stopCount >= 3 ? 0.72 : 1;
-  const screenScale = screenWidth < 520 ? 0.56 : screenWidth < 768 ? 0.68 : 1;
-  const layoutScale = isStackedLayout ? 0.76 : 1;
-  const scale = densityScale * screenScale * layoutScale;
-
-  return {
-    start: Math.max(12, Math.round(22 * scale)),
-    end: Math.max(28, Math.round(96 * scale)),
-  };
-}
-
-function buildLeaderRibbon({
-  stopPoint,
-  cardRect,
-  mapRect,
-  widths,
-  cardAnchorSide,
-}: {
-  stopPoint: ScreenPoint;
-  cardRect: { left: number; top: number; right: number; bottom: number; width: number; height: number };
-  mapRect: { left: number; top: number; width: number; height: number };
-  widths: { start: number; end: number };
-  cardAnchorSide: LeaderCardAnchorSide;
-}) {
-  const cardAnchor = getLeaderCardAnchor(cardRect, cardAnchorSide);
-  const spinePoints = cardAnchorSide === "right"
-    ? buildDesktopLeaderSpine(stopPoint, cardAnchor)
-    : buildStackedLeaderSpine(stopPoint, cardAnchor, mapRect, cardAnchorSide);
-  const ribbonPoints = buildRibbonPolygonPoints(
-    spinePoints,
-    spinePoints.map((_, index) => {
-      if (index === 0) {
-        return widths.start;
-      }
-
-      if (index === spinePoints.length - 1) {
-        return widths.end;
-      }
-
-      return widths.end * 0.74;
-    }),
-  );
-
-  return {
-    polygon: toPolygonPoints(ribbonPoints),
-    cssPolygon: toCssPolygonPoints(ribbonPoints),
-    stopX: stopPoint.x,
-    stopY: stopPoint.y,
-    cardX: cardAnchor.x,
-    cardY: cardAnchor.y,
-    stopRadius: Math.max(4, widths.start * 0.34),
-  };
-}
-
-function buildDesktopLeaderSpine(stopPoint: ScreenPoint, cardAnchor: ScreenPoint) {
-  const dropX = cardAnchor.x + 56;
-
-  return [
-    stopPoint,
-    { x: dropX, y: cardAnchor.y },
-    cardAnchor,
-  ];
-}
-
-function getLeaderCardAnchor(
-  cardRect: { left: number; top: number; right: number; bottom: number; width: number; height: number },
-  side: LeaderCardAnchorSide,
-) {
-  if (side === "right") {
-    return {
-      x: cardRect.right,
-      y: cardRect.top + cardRect.height * 0.5,
-    };
-  }
-
-  return {
-    x: cardRect.left + cardRect.width * 0.5,
-    y: side === "top" ? cardRect.top : cardRect.bottom,
-  };
-}
-
-function buildStackedLeaderSpine(
-  stopPoint: ScreenPoint,
-  cardAnchor: ScreenPoint,
-  mapRect: { left: number; top: number; width: number; height: number },
-  cardAnchorSide: Exclude<LeaderCardAnchorSide, "right">,
-) {
-  const dropY = cardAnchorSide === "top"
-    ? Math.min(cardAnchor.y - 44, mapRect.top + mapRect.height - 10)
-    : Math.max(cardAnchor.y + 44, mapRect.top + 10);
-
-  return [
-    stopPoint,
-    { x: cardAnchor.x, y: dropY },
-    cardAnchor,
-  ];
 }
 
 function getStopCardStyle(color: string) {
@@ -2305,111 +2101,6 @@ function getLeaderFrostStyle(line: LeaderRibbon) {
       `inset 0 -12px 24px ${withAlpha("#020617", 0.16)}`,
     ].join(", "),
   } as CSSProperties;
-}
-
-function buildRibbonPolygonPoints(
-  points: ScreenPoint[],
-  widths: number[],
-) {
-  if (points.length < 2) {
-    return [];
-  }
-
-  const left: ScreenPoint[] = [];
-  const right: ScreenPoint[] = [];
-
-  for (let index = 0; index < points.length; index += 1) {
-    const point = points[index];
-    const halfWidth = (widths[index] ?? widths[widths.length - 1] ?? 0) / 2;
-
-    if (index === 0) {
-      const normal = getSegmentNormal(points[0], points[1]);
-      left.push(offsetPoint(point, normal, halfWidth));
-      right.push(offsetPoint(point, normal, -halfWidth));
-      continue;
-    }
-
-    if (index === points.length - 1) {
-      const normal = getSegmentNormal(points[index - 1], point);
-      left.push(offsetPoint(point, normal, halfWidth));
-      right.push(offsetPoint(point, normal, -halfWidth));
-      continue;
-    }
-
-    left.push(getJoinedOffsetPoint(points[index - 1], point, points[index + 1], halfWidth));
-    right.push(getJoinedOffsetPoint(points[index - 1], point, points[index + 1], -halfWidth));
-  }
-
-  return [...left, ...right.reverse()];
-}
-
-function getJoinedOffsetPoint(prev: ScreenPoint, point: ScreenPoint, next: ScreenPoint, offset: number) {
-  const incomingNormal = getSegmentNormal(prev, point);
-  const outgoingNormal = getSegmentNormal(point, next);
-  const incomingStart = offsetPoint(prev, incomingNormal, offset);
-  const incomingEnd = offsetPoint(point, incomingNormal, offset);
-  const outgoingStart = offsetPoint(point, outgoingNormal, offset);
-  const outgoingEnd = offsetPoint(next, outgoingNormal, offset);
-
-  return getLineIntersection(incomingStart, incomingEnd, outgoingStart, outgoingEnd) ?? outgoingStart;
-}
-
-function getSegmentNormal(start: ScreenPoint, end: ScreenPoint) {
-  const tangent = normalize({
-    x: end.x - start.x,
-    y: end.y - start.y,
-  });
-
-  return {
-    x: -tangent.y,
-    y: tangent.x,
-  };
-}
-
-function offsetPoint(point: ScreenPoint, normal: ScreenPoint, offset: number) {
-  return {
-    x: point.x + normal.x * offset,
-    y: point.y + normal.y * offset,
-  };
-}
-
-function getLineIntersection(a1: ScreenPoint, a2: ScreenPoint, b1: ScreenPoint, b2: ScreenPoint) {
-  const aDx = a2.x - a1.x;
-  const aDy = a2.y - a1.y;
-  const bDx = b2.x - b1.x;
-  const bDy = b2.y - b1.y;
-  const denominator = aDx * bDy - aDy * bDx;
-
-  if (Math.abs(denominator) < 0.001) {
-    return null;
-  }
-
-  const progress = ((b1.x - a1.x) * bDy - (b1.y - a1.y) * bDx) / denominator;
-
-  return {
-    x: a1.x + progress * aDx,
-    y: a1.y + progress * aDy,
-  };
-}
-
-function toPolygonPoints(points: ScreenPoint[]) {
-  return points.map((point) => `${point.x},${point.y}`).join(" ");
-}
-
-function toCssPolygonPoints(points: ScreenPoint[]) {
-  return points.map((point) => `${point.x}px ${point.y}px`).join(", ");
-}
-
-function normalize(vector: { x: number; y: number }) {
-  const length = Math.hypot(vector.x, vector.y);
-  if (length < 0.001) {
-    return { x: 0, y: 1 };
-  }
-
-  return {
-    x: vector.x / length,
-    y: vector.y / length,
-  };
 }
 
 function withAlpha(hex: string, alpha: number) {
