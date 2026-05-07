@@ -84,6 +84,8 @@ export function getScheduleFit(
   const minScale = isStackedLayout ? 0.88 : stopCount >= 4 && screenSize.height < 720 ? 0.86 : stopCount >= 3 && screenSize.height < 720 ? 0.9 : 0.96;
   const maxScale = isStackedLayout ? 1.22 : 1.34;
   const minComfortInset = isStackedLayout ? 4 : stopCount >= 4 && screenSize.height < 720 ? 3 : stopCount >= 3 ? 4 : 8;
+  // Map-first stacked layouts deliberately spend more vertical space on the map.
+  // The remaining schedule budget may reduce row count so cards stay readable and unclipped.
   const boardHeight = isStackedLayout
     ? Math.max(0, getStackedLayoutMetrics(stopCount, screenSize, splitStackedSchedules).scheduleBoardHeight - (splitStackedSchedules ? 68 : 82))
     : screenSize.height - 118;

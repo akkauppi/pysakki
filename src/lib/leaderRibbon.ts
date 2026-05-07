@@ -54,6 +54,7 @@ export function buildLeaderRibbon({
   const spinePoints = cardAnchorSide === "right"
     ? buildDesktopLeaderSpine(stopPoint, cardAnchor)
     : buildStackedLeaderSpine(stopPoint, cardAnchor, mapRect, cardAnchorSide);
+  // Convert the center spine into a tapered polygon so the card-to-stop link has real visual mass.
   const ribbonPoints = buildRibbonPolygonPoints(
     spinePoints,
     spinePoints.map((_, index) => {
@@ -140,6 +141,7 @@ function buildRibbonPolygonPoints(
     const halfWidth = (widths[index] ?? widths[widths.length - 1] ?? 0) / 2;
 
     if (index === 0) {
+      // End caps use the adjacent segment normal; inner points need a joined offset.
       const normal = getSegmentNormal(points[0], points[1]);
       left.push(offsetPoint(point, normal, halfWidth));
       right.push(offsetPoint(point, normal, -halfWidth));
@@ -161,6 +163,8 @@ function buildRibbonPolygonPoints(
 }
 
 function getJoinedOffsetPoint(prev: ScreenPoint, point: ScreenPoint, next: ScreenPoint, offset: number) {
+  // Intersect the two offset segment lines to create a miter; fall back to the outgoing
+  // offset when the segments are effectively parallel.
   const incomingNormal = getSegmentNormal(prev, point);
   const outgoingNormal = getSegmentNormal(point, next);
   const incomingStart = offsetPoint(prev, incomingNormal, offset);

@@ -101,9 +101,9 @@ test("keeps desktop leaders attached to the card edge", async ({ page }) => {
 
 test("waits for map idle before returning a manually moved map to selected stops", async ({ page }) => {
   await page.addInitScript(() => {
-    const events: number[] = [];
+    const events: Array<{ animated: boolean; duration: number }> = [];
     window.addEventListener("pysakki-map-fit", (event) => {
-      events.push((event as CustomEvent<{ duration: number }>).detail.duration);
+      events.push((event as CustomEvent<{ animated: boolean; duration: number }>).detail);
     });
     Reflect.set(window, "__pysakkiFitEvents", events);
   });
@@ -123,7 +123,7 @@ test("waits for map idle before returning a manually moved map to selected stops
   expect(await getFitEvents(page)).toEqual([]);
 
   await page.waitForTimeout(4_500);
-  expect(await getFitEvents(page)).toContain(2_800);
+  expect(await getFitEvents(page)).toContainEqual({ animated: true, duration: 2_800 });
 });
 
 async function openStops(page: Page, viewport: { width: number; height: number }, stopCount: number) {
@@ -245,5 +245,5 @@ async function expectNoRowOverflow(page: Page) {
 }
 
 async function getFitEvents(page: Page) {
-  return page.evaluate(() => Reflect.get(window, "__pysakkiFitEvents") as number[]);
+  return page.evaluate(() => Reflect.get(window, "__pysakkiFitEvents") as Array<{ animated: boolean; duration: number }>);
 }
