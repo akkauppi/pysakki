@@ -21,7 +21,6 @@ import { cn } from "./lib/cn";
 import {
   filterStopsWithActiveDepartures,
   getDepartureLimit,
-  getMaxDepartureCount,
   mergeArrangedStopIds,
   orderStopsByIds,
 } from "./lib/departures";
@@ -33,10 +32,7 @@ import {
 } from "./lib/urlState";
 import {
   getAppGridStyle,
-  getScheduleFit,
-  getScheduleScaleStyle,
   getStopBoardLayout,
-  type ScheduleRowVariant,
 } from "./lib/scheduleLayout";
 import { useLeaderOverlay } from "./hooks/useLeaderOverlay";
 import { useTransitMap } from "./hooks/useTransitMap";
@@ -88,15 +84,12 @@ export default function App() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const mapShellRef = useRef<HTMLDivElement | null>(null);
   const stopCardRefs = useRef(new Map<string, HTMLElement>());
-  const previousScheduleRowVariantRef = useRef<ScheduleRowVariant>("compact");
 
   const departureLimit = getDepartureLimit(stopIds.length);
 
   const { stops, stopsRef, loading: stopsLoading, error: stopsError } = useStopDepartures({
     stopIds,
     departureLimit,
-    visibleDepartureCount: 3, // Initial guess, updated by scheduleFit
-    now,
   });
 
   const vehicleMqttTopics = useMemo(
@@ -112,7 +105,7 @@ export default function App() {
     () => orderStopsByIds(activeStops, arrangedStopIds),
     [activeStops, arrangedStopIds],
   );
-  const hasDirectionHints = displayStops.some((stop) => stop.directionHint);
+
   const splitStackedSchedules =
     isStackedLayout &&
     overlaySize.height >= 600 &&
@@ -120,39 +113,20 @@ export default function App() {
     !setupMode &&
     !editMode &&
     displayStops.length >= 3;
+    
   const topDisplayStops = splitStackedSchedules ? displayStops.slice(0, 2) : displayStops;
   const bottomDisplayStops = splitStackedSchedules ? displayStops.slice(2) : [];
-  const stopBoardLayout = getStopBoardLayout(displayStops.length, isStackedLayout);
+  
   const topStopBoardLayout = getStopBoardLayout(topDisplayStops.length, isStackedLayout);
   const bottomStopBoardLayout = getStopBoardLayout(bottomDisplayStops.length, isStackedLayout);
-  const maxActiveDepartureCount = getMaxDepartureCount(activeStops);
-
-  const scheduleFit = getScheduleFit(
-    displayStops.length,
-    Math.min(departureLimit, maxActiveDepartureCount),
-    isStackedLayout,
-    overlaySize,
-    previousScheduleRowVariantRef.current,
-    hasDirectionHints,
-    splitStackedSchedules,
-  );
-  previousScheduleRowVariantRef.current = scheduleFit.rowVariant;
-
-  const visibleDepartureCount = scheduleFit.visibleCount;
-  const compactSchedule = visibleDepartureCount <= 2;
-  const showScheduledTime = scheduleFit.rowVariant === "full";
-  const showModeIcon = scheduleFit.rowVariant !== "compact";
-  const showHeadsign = scheduleFit.rowVariant !== "compact";
-  const ultraCompactSchedule = scheduleFit.rowVariant === "compact";
-  const denseScheduleHeader = scheduleFit.rowVariant !== "full" || displayStops.length >= 4;
-  const emptySchedule = visibleDepartureCount === 0;
-  const scheduleScaleStyle = getScheduleScaleStyle(scheduleFit, compactSchedule);
+  
   const appGridStyle = getAppGridStyle({
     isStackedLayout,
     screenSize: overlaySize,
     splitStackedSchedules,
     stopCount: displayStops.length,
   });
+  
   const shareUrl = getShareUrl(viewport, stopIds);
 
   const {
@@ -344,19 +318,9 @@ export default function App() {
               <StopBoard
                 stops={topDisplayStops}
                 allDisplayStops={displayStops}
-                layout={splitStackedSchedules ? topStopBoardLayout : stopBoardLayout}
+                layout={splitStackedSchedules ? topStopBoardLayout : topStopBoardLayout}
                 testId="stop-board"
                 stopCardRefs={stopCardRefs}
-                visibleDepartureCount={visibleDepartureCount}
-                scheduleFit={scheduleFit}
-                scheduleScaleStyle={scheduleScaleStyle}
-                compactSchedule={compactSchedule}
-                denseScheduleHeader={denseScheduleHeader}
-                ultraCompactSchedule={ultraCompactSchedule}
-                emptySchedule={emptySchedule}
-                showModeIcon={showModeIcon}
-                showHeadsign={showHeadsign}
-                showScheduledTime={showScheduledTime}
               />
             )}
           </div>
@@ -404,16 +368,6 @@ export default function App() {
               layout={bottomStopBoardLayout}
               testId="bottom-stop-board"
               stopCardRefs={stopCardRefs}
-              visibleDepartureCount={visibleDepartureCount}
-              scheduleFit={scheduleFit}
-              scheduleScaleStyle={scheduleScaleStyle}
-              compactSchedule={compactSchedule}
-              denseScheduleHeader={denseScheduleHeader}
-              ultraCompactSchedule={ultraCompactSchedule}
-              emptySchedule={emptySchedule}
-              showModeIcon={showModeIcon}
-              showHeadsign={showHeadsign}
-              showScheduledTime={showScheduledTime}
             />
           </section>
         ) : null}

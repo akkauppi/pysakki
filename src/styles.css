@@ -47,3 +47,98 @@ body {
 .maplibregl-popup-content {
   border-radius: 18px;
 }
+
+/* Redesigned Autonomous Layout Engine CSS */
+
+.stop-card-container {
+  container-type: size;
+  height: 100%;
+}
+
+.departure-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  gap: 0.5cqh;
+}
+
+.departure-row {
+  flex-shrink: 0;
+  display: grid;
+  align-items: center;
+  /* Fluid row height based on container height */
+  height: clamp(32px, 20cqh, 72px);
+  padding: 0 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.8rem;
+  overflow: hidden;
+}
+
+/* Container Queries for Adaptive Details */
+
+/* Very short cards (e.g. 4 stops on mobile) */
+@container (height < 140px) {
+  .departure-list {
+    gap: 0 !important;
+  }
+  .departure-row {
+    height: clamp(24px, 30cqh, 44px) !important;
+    padding: 0 0.25rem !important;
+    gap: 0.15rem !important;
+    overflow: hidden !important;
+    border-width: 0 !important; /* Remove border to save pixels */
+  }
+  .departure-row > * {
+    max-height: 100% !important;
+    overflow: hidden !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+  .departure-mode-icon {
+    display: none !important;
+  }
+  .departure-headsign {
+    display: none !important;
+  }
+  .departure-scheduled-time {
+    display: none !important;
+  }
+  .departure-route {
+    font-size: 0.7rem !important;
+    line-height: 1 !important;
+  }
+  .departure-relative-time {
+    font-size: 0.75rem !important;
+    line-height: 1 !important;
+  }
+}
+
+
+/* Medium cards */
+@container (height >= 140px) and (height < 240px) {
+  .departure-row {
+    grid-template-columns: auto 1fr auto;
+    gap: 0.6rem;
+  }
+  .departure-scheduled-time {
+    display: none;
+  }
+}
+
+/* Tall cards (Desktop or 1-2 stops) */
+@container (height >= 240px) {
+  .departure-row {
+    grid-template-columns: auto 1fr auto;
+    gap: 0.8rem;
+    height: clamp(54px, 15cqh, 82px);
+  }
+}
+
+/* Fluid Typography for Headers */
+.stop-card-name {
+  font-size: clamp(0.9rem, 8cqh, 1.4rem);
+}
+.stop-card-meta {
+  font-size: clamp(0.7rem, 5cqh, 0.9rem);
+}

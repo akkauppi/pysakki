@@ -1,12 +1,12 @@
-import type { CSSProperties, RefObject } from "react";
+import { type CSSProperties, type RefObject } from "react";
 import { Bus, TrainFront, TramFront } from "lucide-react";
 import type { StopWithDepartures } from "../api/digitransit";
 import { cn } from "../lib/cn";
 import { getDepartureKey } from "../lib/departures";
 import { getLeaderId } from "../lib/leaderRibbon";
 import { formatDepartureTime, formatRelativeMinutes } from "../lib/time";
-import type { ScheduleFit } from "../lib/scheduleLayout";
 import { registerStopCardRef } from "../lib/stopCardRefs";
+import { useAutoFit } from "../hooks/useAutoFit";
 
 const STOP_MARKER_COLORS = ["#34d399", "#38bdf8", "#f59e0b", "#f472b6"] as const;
 
@@ -16,32 +16,12 @@ export function StopBoard({
   layout,
   testId,
   stopCardRefs,
-  visibleDepartureCount,
-  scheduleFit,
-  scheduleScaleStyle,
-  compactSchedule,
-  denseScheduleHeader,
-  ultraCompactSchedule,
-  emptySchedule,
-  showModeIcon,
-  showHeadsign,
-  showScheduledTime,
 }: {
   stops: StopWithDepartures[];
   allDisplayStops: StopWithDepartures[];
   layout: CSSProperties;
   testId: string;
   stopCardRefs: RefObject<Map<string, HTMLElement>>;
-  visibleDepartureCount: number;
-  scheduleFit: ScheduleFit;
-  scheduleScaleStyle: CSSProperties;
-  compactSchedule: boolean;
-  denseScheduleHeader: boolean;
-  ultraCompactSchedule: boolean;
-  emptySchedule: boolean;
-  showModeIcon: boolean;
-  showHeadsign: boolean;
-  showScheduledTime: boolean;
 }) {
   return (
     <div
@@ -58,16 +38,6 @@ export function StopBoard({
             stop={stop}
             displayIndex={displayIndex}
             stopCardRefs={stopCardRefs}
-            visibleDepartureCount={visibleDepartureCount}
-            scheduleFit={scheduleFit}
-            scheduleScaleStyle={scheduleScaleStyle}
-            compactSchedule={compactSchedule}
-            denseScheduleHeader={denseScheduleHeader}
-            ultraCompactSchedule={ultraCompactSchedule}
-            emptySchedule={emptySchedule}
-            showModeIcon={showModeIcon}
-            showHeadsign={showHeadsign}
-            showScheduledTime={showScheduledTime}
           />
         );
       })}
@@ -79,34 +49,18 @@ function StopCard({
   stop,
   displayIndex,
   stopCardRefs,
-  visibleDepartureCount,
-  scheduleFit,
-  scheduleScaleStyle,
-  compactSchedule,
-  denseScheduleHeader,
-  ultraCompactSchedule,
-  emptySchedule,
-  showModeIcon,
-  showHeadsign,
-  showScheduledTime,
 }: {
   stop: StopWithDepartures;
   displayIndex: number;
   stopCardRefs: RefObject<Map<string, HTMLElement>>;
-  visibleDepartureCount: number;
-  scheduleFit: ScheduleFit;
-  scheduleScaleStyle: CSSProperties;
-  compactSchedule: boolean;
-  denseScheduleHeader: boolean;
-  ultraCompactSchedule: boolean;
-  emptySchedule: boolean;
-  showModeIcon: boolean;
-  showHeadsign: boolean;
-  showScheduledTime: boolean;
 }) {
   const color = STOP_MARKER_COLORS[displayIndex] ?? "#ffffff";
   const leaderId = getLeaderId(stop, displayIndex);
-  const directionHint = formatStopDirectionHint(stop, denseScheduleHeader || ultraCompactSchedule);
+  
+  // Try to render as many as 6 departures initially, then auto-shrink
+  const { containerRef: listRef, visibleCount } = useAutoFit(6);
+  
+  const directionHint = formatStopDirectionHint(stop);
   const metadataDirection = stop.code && directionHint?.startsWith(stop.code)
     ? directionHint.slice(stop.code.length).replace(/^[\s·]+/, "").trim()
     : directionHint;
@@ -115,86 +69,76 @@ function StopCard({
   return (
     <section
       data-testid="stop-card"
-      ref={(element) => registerStopCardRef(stopCardRefs, leaderId, element)}
-      className={cn(
-        "relative z-30 flex min-h-0 flex-col overflow-hidden border backdrop-blur-xl",
-        ultraCompactSchedule ? "rounded-[1.1rem]" : compactSchedule ? "rounded-[1.25rem]" : "rounded-[1.5rem]",
-        emptySchedule ? "p-1.5" : ultraCompactSchedule ? "p-1.5" : compactSchedule ? "p-1.5" : "p-3.5 sm:p-4",
-      )}
-      style={getStopCardStyle(color)}
+      className="stop-card-container relative z-30"
     >
-      <div className={cn("flex items-start gap-2", emptySchedule ? "mb-0" : ultraCompactSchedule ? "mb-0" : compactSchedule ? "mb-0" : "mb-2.5")}>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className={cn("truncate font-semibold text-white", emptySchedule ? "text-[clamp(0.78rem,2.2vw,0.92rem)] leading-none" : denseScheduleHeader ? "text-[clamp(0.8rem,2.2vw,0.98rem)] leading-none" : ultraCompactSchedule ? "text-[clamp(0.8rem,2.4vw,0.96rem)] leading-none" : compactSchedule ? "text-[clamp(0.9rem,2.4vw,1.08rem)] leading-tight" : "text-[clamp(1.05rem,1.35vw,1.35rem)] leading-tight")}>
-                {stop.name}
-              </div>
-              {stopMeta || directionHint ? (
-                <div
-                  data-testid="stop-direction-hint"
-                  className={cn("truncate text-cyan-100/85", denseScheduleHeader || ultraCompactSchedule ? "mt-0.5 text-[9px] leading-none" : "mt-1 text-xs leading-4")}
-                >
-                  {[stopMeta, metadataDirection].filter(Boolean).join(" · ")}
-                </div>
-              ) : null}
-            </div>
-          </div>
-          {stop.desc && !compactSchedule && !directionHint ? (
-            <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-300">
-              {stop.desc}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
       <div
-        className="grid min-h-0 flex-1"
-        data-testid="departure-list"
-        data-visible-departures={String(visibleDepartureCount)}
-        data-schedule-scale={scheduleFit.scale.toFixed(2)}
-        data-schedule-variant={scheduleFit.rowVariant}
-        style={scheduleScaleStyle}
+        ref={(element) => {
+          registerStopCardRef(stopCardRefs, leaderId, element);
+        }}
+        className={cn(
+          "flex h-full min-h-0 flex-col overflow-hidden border backdrop-blur-xl rounded-[1.5rem] p-3 sm:p-4",
+        )}
+        style={getStopCardStyle(color)}
       >
-        {stop.departures.slice(0, visibleDepartureCount).map((departure) => (
-          <div
-            key={getDepartureKey(stop.gtfsId, departure)}
-            data-testid="departure-row"
-            className={cn(
-              "departure-row-motion grid min-h-0 overflow-hidden items-center rounded-[var(--schedule-row-radius)] border border-white/10 px-[var(--schedule-row-px)] py-[var(--schedule-row-py)] transition-[opacity,transform] duration-500 ease-out",
-              showModeIcon ? "grid-cols-[auto_minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]" : "grid-cols-[minmax(0,1fr)_auto] gap-[var(--schedule-row-gap)]",
-            )}
-            style={getStopRowStyle(color)}
-          >
-            {showModeIcon ? (
-              <div data-testid="departure-mode-icon" className="flex h-[var(--schedule-icon-size)] w-[var(--schedule-icon-size)] items-center justify-center rounded-[var(--schedule-icon-radius)] bg-black/20">
-                <ModeIcon mode={departure.routeMode} className="h-[var(--schedule-mode-icon-size)] w-[var(--schedule-mode-icon-size)]" />
-              </div>
-            ) : null}
-
-            <div className="min-w-0 overflow-hidden">
-              <div className="flex items-end gap-2">
-                <span data-testid="departure-route" className="text-[length:var(--schedule-route-size)] font-semibold leading-none text-white">
-                  {departure.routeShortName ?? departure.routeMode}
-                </span>
-                {showHeadsign ? (
-                  <span className="truncate pb-0.5 text-[length:var(--schedule-headsign-size)] leading-none text-slate-200">{departure.headsign}</span>
+        <div className="mb-2 flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="stop-card-name truncate font-semibold text-white">
+                  {stop.name}
+                </div>
+                {stopMeta || directionHint ? (
+                  <div
+                    data-testid="stop-direction-hint"
+                    className="stop-card-meta truncate text-cyan-100/85 mt-0.5"
+                  >
+                    {[stopMeta, metadataDirection].filter(Boolean).join(" · ")}
+                  </div>
                 ) : null}
               </div>
-              {showScheduledTime ? (
-                <div data-testid="departure-scheduled-time" className="mt-[var(--schedule-time-mt)] truncate uppercase text-[length:var(--schedule-time-size)] leading-tight tracking-[var(--schedule-time-tracking)] text-slate-300">
-                  {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="text-right">
-              <div data-testid="departure-relative-time" className="text-[length:var(--schedule-relative-size)] font-semibold leading-none text-white tabular-nums">
-                {formatRelativeMinutes(departure.serviceDay, departure.realtimeDeparture)}
-              </div>
             </div>
           </div>
-        ))}
+        </div>
+
+        <div
+          ref={listRef as RefObject<HTMLDivElement>}
+          className="departure-list flex-1 min-h-0"
+          data-testid="departure-list"
+          data-visible-departures={String(visibleCount)}
+        >
+          {stop.departures.slice(0, visibleCount).map((departure) => (
+            <div
+              key={getDepartureKey(stop.gtfsId, departure)}
+              data-testid="departure-row"
+              className="departure-row departure-row-motion grid grid-cols-[minmax(0,1fr)_auto]"
+              style={getStopRowStyle(color)}
+            >
+              <div className="flex items-center gap-2 overflow-hidden min-w-0">
+                <div data-testid="departure-mode-icon" className="departure-mode-icon flex h-8 w-8 items-center justify-center rounded-lg bg-black/20 shrink-0">
+                  <ModeIcon mode={departure.routeMode} className="h-5 w-5" />
+                </div>
+                
+                <div className="min-w-0 overflow-hidden">
+                  <div className="flex items-baseline gap-2">
+                    <span data-testid="departure-route" className="departure-route font-semibold text-white whitespace-nowrap">
+                      {departure.routeShortName ?? departure.routeMode}
+                    </span>
+                    <span className="departure-headsign truncate text-slate-200 text-sm">{departure.headsign}</span>
+                  </div>
+                  <div data-testid="departure-scheduled-time" className="departure-scheduled-time truncate uppercase text-[10px] tracking-wider text-slate-300">
+                    {formatDepartureTime(departure.serviceDay, departure.realtimeDeparture)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div data-testid="departure-relative-time" className="departure-relative-time font-bold text-white tabular-nums">
+                  {formatRelativeMinutes(departure.serviceDay, departure.realtimeDeparture)}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -212,18 +156,11 @@ function ModeIcon({ mode, className }: { mode: string; className?: string }) {
   return <Bus className={cn("h-4 w-4 text-emerald-300", className)} />;
 }
 
-function formatStopDirectionHint(stop: Pick<StopWithDepartures, "code" | "directionHint">, compact: boolean) {
+function formatStopDirectionHint(stop: Pick<StopWithDepartures, "code" | "directionHint">) {
   if (!stop.directionHint) {
     return null;
   }
-
-  const destination = compact ? shortenDirectionHint(stop.directionHint) : stop.directionHint;
-  return [stop.code, compact ? `→ ${destination}` : `toward ${destination}`].filter(Boolean).join(compact ? " " : " · ");
-}
-
-function shortenDirectionHint(value: string) {
-  const withoutPrefix = value.replace(/^kohti\s+/i, "").replace(/^towards?\s+/i, "");
-  return withoutPrefix.length <= 18 ? withoutPrefix : `${withoutPrefix.slice(0, 17).trim()}…`;
+  return [stop.code, `toward ${stop.directionHint}`].filter(Boolean).join(" · ");
 }
 
 function getStopCardStyle(color: string) {
