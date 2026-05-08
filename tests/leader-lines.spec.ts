@@ -27,8 +27,8 @@ test("routes 3-stop split stacked leaders between top cards, map, and bottom car
   await expect(page.getByTestId("leader-3d")).toHaveCount(3);
 
   const metrics = await getLayoutMetrics(page);
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.56);
-  expect(metrics.mapHeight).toBeGreaterThan(metrics.topPanelHeight * 2.2);
+  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.48);
+  expect(metrics.mapHeight).toBeGreaterThan(metrics.topPanelHeight * 1.8);
 
   const cardRects = await getCardRects(page);
   expect(cardRects[0].bottom).toBeLessThanOrEqual(metrics.mapTop + 1);
@@ -43,8 +43,8 @@ test("keeps 4-stop split stacked usable on a short phone", async ({ page }) => {
   await openStops(page, { width: 390, height: 640 }, 4);
 
   const metrics = await getLayoutMetrics(page);
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.53);
-  expect(metrics.mapRatio).toBeLessThanOrEqual(0.6);
+  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.44);
+  expect(metrics.mapRatio).toBeLessThanOrEqual(0.55);
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(1);
   await expect(page.getByTestId("leader-ribbon")).toHaveCount(4);
   await expectNoCardOverflow(page);

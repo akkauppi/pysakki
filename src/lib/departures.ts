@@ -6,18 +6,18 @@ export type Departure = StopWithDepartures["departures"][number];
 
 export function getDepartureLimit(stopCount: number) {
   if (stopCount >= 4) {
-    return 8;
-  }
-
-  if (stopCount === 3) {
-    return 10;
-  }
-
-  if (stopCount === 2) {
     return 12;
   }
 
-  return 14;
+  if (stopCount === 3) {
+    return 12;
+  }
+
+  if (stopCount === 2) {
+    return 16;
+  }
+
+  return 16;
 }
 
 export function filterStopsWithActiveDepartures(stops: StopWithDepartures[], now: Date): StopWithDepartures[] {

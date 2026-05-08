@@ -35,8 +35,9 @@ export function getStackedLayoutMetrics(
   splitStackedSchedules: boolean,
 ): StackedLayoutMetrics {
   if (splitStackedSchedules) {
-    // 3-4 stops: Split into top and bottom boards to avoid crossing leader lines.
-    const mapRatio = screenSize.height < 700 ? 0.57 : 0.59;
+    // 3-4 stops: Split into top and bottom boards.
+    // Give more space to schedules to ensure at least 2 rows fit.
+    const mapRatio = screenSize.height < 700 ? 0.48 : 0.52;
     const boardRatio = (1 - mapRatio) / 2;
     return {
       mapRatio,
@@ -47,7 +48,7 @@ export function getStackedLayoutMetrics(
     };
   }
 
-  // 1-2 stops: Single board at the top, map taking the rest.
+  // 1-2 stops: Single board at the top.
   const landscape = screenSize.height < screenSize.width;
   const mapRatio = landscape ? 0.62 : stopCount <= 2 ? 0.65 : 0.62;
   const boardRatio = 1 - mapRatio;
@@ -105,8 +106,8 @@ export function getScheduleFit(
   // Map-first stacked layouts deliberately spend more vertical space on the map.
   // The remaining schedule budget may reduce row count so cards stay readable and unclipped.
   const boardHeight = isStackedLayout
-    ? Math.max(0, getStackedLayoutMetrics(stopCount, screenSize, splitStackedSchedules).scheduleBoardHeight - (splitStackedSchedules ? 68 : 82))
-    : screenSize.height - 118;
+    ? Math.max(0, getStackedLayoutMetrics(stopCount, screenSize, splitStackedSchedules).scheduleBoardHeight - (splitStackedSchedules ? 88 : 110))
+    : screenSize.height - 120;
   const layoutRows = isStackedLayout ? (stopCount <= 2 || splitStackedSchedules ? 1 : 2) : Math.max(stopCount, 1);
   const cardHeight = boardHeight / Math.max(layoutRows, 1) - getScheduleCardSafetyReserve(stopCount, isStackedLayout);
   const maxDepartureCountForViewport = !isStackedLayout && stopCount >= 3 && screenSize.height < 720
@@ -283,22 +284,22 @@ function getScheduleVariantPriority(
 function getScheduleHeaderReserve(stopCount: number, visibleCount: number, hasDirectionHints: boolean) {
   const directionReserve = hasDirectionHints && stopCount < 3 ? 14 : 0;
   if (visibleCount <= 1) {
-    return (stopCount >= 3 ? 26 : 48) + directionReserve;
+    return (stopCount >= 3 ? 42 : 54) + directionReserve;
   }
 
-  return (stopCount >= 3 ? 30 : 64) + directionReserve;
+  return (stopCount >= 3 ? 46 : 68) + directionReserve;
 }
 
 function getScheduleCardSafetyReserve(stopCount: number, isStackedLayout: boolean) {
   if (isStackedLayout) {
-    return stopCount >= 3 ? 8 : 14;
+    return stopCount >= 3 ? 12 : 18;
   }
 
   if (stopCount >= 4) {
-    return 24;
+    return 28;
   }
 
-  return stopCount >= 3 ? 14 : 18;
+  return stopCount >= 3 ? 18 : 22;
 }
 
 function getScheduleBaseListGap(visibleCount: number) {
