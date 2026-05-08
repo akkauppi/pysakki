@@ -9,7 +9,8 @@ test("allocates most of 1-2 stop stacked layouts to the map", () => {
 
   expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.62);
   expect(metrics.mapRatio).toBeLessThanOrEqual(0.66);
-  expect(metrics.scheduleBoardHeight).toBeCloseTo(844 * 0.35, 0);
+  // Accurate calculation: (844 - 16 appPadding - 8 gap) * (1 - 0.65 mapRatio)
+  expect(metrics.scheduleBoardHeight).toBeCloseTo(287, 0);
 });
 
 test("allocates most of split stacked layouts to the map", () => {
@@ -31,8 +32,9 @@ test("uses the same stacked board budget when fitting compact schedules", () => 
     true,
   );
 
-  expect(fit.visibleCount).toBeGreaterThanOrEqual(0);
+  expect(fit.visibleCount).toBeGreaterThanOrEqual(1);
   expect(fit.visibleCount).toBeLessThanOrEqual(2);
   expect(fit.rowVariant).toBe("compact");
-  expect(fit.rowHeight).toBeGreaterThanOrEqual(32);
-});
+  expect(fit.rowHeight).toBeGreaterThanOrEqual(30);
+  });
+

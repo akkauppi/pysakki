@@ -34,17 +34,23 @@ export function getStackedLayoutMetrics(
   screenSize: ScreenSize,
   splitStackedSchedules: boolean,
 ): StackedLayoutMetrics {
+  const appPadding = 16; // p-2 is 8px * 2
+  const gridGap = 8;     // gap-2 is 8px
+  const effectiveHeight = screenSize.height - appPadding;
+
   if (splitStackedSchedules) {
     // 3-4 stops: Split into top and bottom boards.
-    // Give more space to schedules to ensure at least 2 rows fit.
-    const mapRatio = screenSize.height < 700 ? 0.48 : 0.52;
+    const mapRatio = screenSize.height < 700 ? 0.48 : 0.50;
     const boardRatio = (1 - mapRatio) / 2;
+    const totalGaps = gridGap * 2;
+    const boardHeight = (effectiveHeight - totalGaps) * boardRatio;
+
     return {
       mapRatio,
       topBoardRatio: boardRatio,
       bottomBoardRatio: boardRatio,
       gridTemplateRows: `minmax(0, ${boardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr) minmax(0, ${boardRatio.toFixed(3)}fr)`,
-      scheduleBoardHeight: screenSize.height * boardRatio,
+      scheduleBoardHeight: boardHeight,
     };
   }
 
@@ -52,12 +58,15 @@ export function getStackedLayoutMetrics(
   const landscape = screenSize.height < screenSize.width;
   const mapRatio = landscape ? 0.62 : stopCount <= 2 ? 0.65 : 0.62;
   const boardRatio = 1 - mapRatio;
+  const totalGaps = gridGap;
+  const boardHeight = (effectiveHeight - totalGaps) * boardRatio;
+
   return {
     mapRatio,
     topBoardRatio: boardRatio,
     bottomBoardRatio: 0,
     gridTemplateRows: `minmax(0, ${boardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr)`,
-    scheduleBoardHeight: screenSize.height * boardRatio,
+    scheduleBoardHeight: boardHeight,
   };
 }
 
@@ -100,21 +109,28 @@ export function getScheduleFit(
   hasDirectionHints: boolean,
   splitStackedSchedules = false,
 ): ScheduleFit {
-  const minScale = isStackedLayout ? 0.88 : stopCount >= 4 && screenSize.height < 720 ? 0.86 : stopCount >= 3 && screenSize.height < 720 ? 0.9 : 0.96;
+  const minScale = isStackedLayout ? 0.72 : stopCount >= 4 && screenSize.height < 720 ? 0.82 : stopCount >= 3 && screenSize.height < 720 ? 0.86 : 0.92;
   const maxScale = isStackedLayout ? 1.22 : 1.34;
-  const minComfortInset = isStackedLayout ? 4 : stopCount >= 4 && screenSize.height < 720 ? 3 : stopCount >= 3 ? 4 : 8;
-  // Map-first stacked layouts deliberately spend more vertical space on the map.
-  // The remaining schedule budget may reduce row count so cards stay readable and unclipped.
+  const minComfortInset = isStackedLayout ? 3 : stopCount >= 4 && screenSize.height < 720 ? 3 : stopCount >= 3 ? 4 : 8;
+  
+  // Surgical reserves for decorations (clock area + container padding)
+  const clockAreaHeight = isStackedLayout ? (splitStackedSchedules ? 48 : 52) : 0;
+  const sectionPadding = isStackedLayout ? 10 : 20;
+
   const boardHeight = isStackedLayout
-    ? Math.max(0, getStackedLayoutMetrics(stopCount, screenSize, splitStackedSchedules).scheduleBoardHeight - (splitStackedSchedules ? 88 : 110))
-    : screenSize.height - 120;
+    ? Math.max(0, getStackedLayoutMetrics(stopCount, screenSize, splitStackedSchedules).scheduleBoardHeight - clockAreaHeight - sectionPadding)
+    : screenSize.height - 110;
   const layoutRows = isStackedLayout ? (stopCount <= 2 || splitStackedSchedules ? 1 : 2) : Math.max(stopCount, 1);
   const cardHeight = boardHeight / Math.max(layoutRows, 1) - getScheduleCardSafetyReserve(stopCount, isStackedLayout);
   const maxDepartureCountForViewport = !isStackedLayout && stopCount >= 3 && screenSize.height < 720
     ? Math.min(maxDepartureCount, 2)
     : maxDepartureCount;
   const maxCandidate = Math.max(0, maxDepartureCountForViewport);
-  const minVisibleCount = Math.min(maxCandidate, 1);
+  
+  // Enforce 2 rows on mobile if data allows, otherwise fall back to 1.
+  const targetMinRows = stopCount >= 3 && isStackedLayout ? 2 : 1;
+  const minVisibleCount = Math.min(maxCandidate, targetMinRows);
+
   const widthScale = screenSize.width < 390 ? 0.98 : 1;
   const variants = getScheduleVariantPriority(stopCount, isStackedLayout, screenSize.height, previousRowVariant);
 
@@ -146,7 +162,9 @@ export function getScheduleFit(
   for (let visibleCount = maxCandidate; visibleCount >= minVisibleCount; visibleCount -= 1) {
     const headerReserve = getScheduleHeaderReserve(stopCount, visibleCount, hasDirectionHints);
     const rowGap = getScheduleBaseListGap(visibleCount);
-    const rowBudget = (cardHeight - headerReserve - rowGap * Math.max(0, visibleCount - 1)) / visibleCount;
+    // Add a 1px safety margin per board to prevent rounding-related partial clipping
+    const budgetMargin = 2;
+    const rowBudget = (cardHeight - headerReserve - (rowGap * Math.max(0, visibleCount - 1)) - budgetMargin) / visibleCount;
     const targetRowHeight = getScheduleTargetRowHeight(visibleCount);
     const rowHeight = Math.min(rowBudget, targetRowHeight * maxScale);
 
