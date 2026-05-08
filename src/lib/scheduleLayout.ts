@@ -151,13 +151,15 @@ export function getScheduleFit(
 
     for (const rowVariant of variants) {
       if (rowBudget >= getScheduleMinimumRowHeight(visibleCount, rowVariant, minComfortInset)) {
-        const resolvedScale = clamp(rowHeight / targetRowHeight, minScale, maxScale);
+        // Use the tighter of rowBudget or target*maxScale to ensure we don't bleed out of the card
+        const resolvedRowHeight = Math.min(rowBudget, rowHeight);
+        const resolvedScale = clamp(resolvedRowHeight / targetRowHeight, minScale, maxScale);
         return {
           visibleCount,
           scale: resolvedScale,
           contentScale: clamp(resolvedScale * widthScale, minScale, maxScale),
           rowVariant,
-          rowHeight,
+          rowHeight: resolvedRowHeight,
         };
       }
     }
