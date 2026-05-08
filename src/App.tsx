@@ -246,7 +246,7 @@ export default function App() {
         )}
         style={appGridStyle}
       >
-        <section className="relative z-30 min-h-0 overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/72 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md md:rounded-[2rem]">
+        <section className="relative min-h-0 overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/72 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md md:rounded-[2rem]">
           <div className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent md:block" />
           <div className="flex h-full min-h-0 flex-col p-2.5 sm:p-4 md:p-5">
             <div className="mb-2 flex items-center justify-between gap-3 sm:mb-3">
@@ -366,7 +366,7 @@ export default function App() {
         {splitStackedSchedules ? (
           <section
             data-testid="bottom-stop-panel"
-            className="relative z-30 min-h-0 overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/72 p-2 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md sm:p-3 md:rounded-[2rem] md:p-4"
+            className="relative min-h-0 overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950/72 p-2 shadow-[0_24px_80px_rgba(2,6,23,0.55)] backdrop-blur-md sm:p-3 md:rounded-[2rem] md:p-4"
           >
             <StopBoard
               stops={bottomDisplayStops}

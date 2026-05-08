@@ -11,8 +11,8 @@ test("gives the map most of a 2-stop stacked phone layout without clipping cards
   await openStops(page, { width: 390, height: 844 }, 2);
 
   const metrics = await getLayoutMetrics(page);
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.6);
-  expect(metrics.mapRatio).toBeLessThanOrEqual(0.68);
+  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.7);
+  expect(metrics.mapRatio).toBeLessThanOrEqual(0.76);
   expect(metrics.mapHeight).toBeGreaterThan(metrics.topPanelHeight * 1.55);
 
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(0);
@@ -20,6 +20,7 @@ test("gives the map most of a 2-stop stacked phone layout without clipping cards
   await expectMinimumDepartureRowsPerCard(page, 2);
   await expectNoDepartureListTrailingGap(page);
   await expectNoCardTrailingGap(page);
+  await expectNoCardSlotTrailingGap(page);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -42,6 +43,8 @@ test("routes 3-stop split stacked leaders between top cards, map, and bottom car
   await expectMinimumDepartureRowsPerCard(page, 2);
   await expectNoDepartureListTrailingGap(page);
   await expectNoCardTrailingGap(page);
+  await expectNoCardSlotTrailingGap(page);
+  await expectStackedLeadersAttachToVisibleCards(page, metrics);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -56,6 +59,8 @@ test("keeps 4-stop split stacked usable on a short phone", async ({ page }) => {
   await expectMinimumDepartureRowsPerCard(page, 2);
   await expectNoDepartureListTrailingGap(page);
   await expectNoCardTrailingGap(page);
+  await expectNoCardSlotTrailingGap(page);
+  await expectStackedLeadersAttachToVisibleCards(page, metrics);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -69,6 +74,7 @@ test("keeps 4-stop stacked landscape map dominant while cards stay linked", asyn
   await expect(page.getByTestId("leader-ribbon")).toHaveCount(4);
   await expectNoDepartureListTrailingGap(page);
   await expectNoCardTrailingGap(page);
+  await expectNoCardSlotTrailingGap(page);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -78,7 +84,7 @@ test("keeps desktop leaders attached to the card edge", async ({ page }) => {
 
   const cards = await page.getByTestId("stop-card").evaluateAll((elements) =>
     elements.map((element) => {
-      const rect = element.getBoundingClientRect();
+      const rect = (element.firstElementChild ?? element).getBoundingClientRect();
       return {
         right: rect.right,
         centerY: rect.top + rect.height / 2,
@@ -219,7 +225,7 @@ async function getLayoutMetrics(page: Page) {
 async function getCardRects(page: Page) {
   return page.getByTestId("stop-card").evaluateAll((cards) =>
     cards.map((card) => {
-      const rect = card.getBoundingClientRect();
+      const rect = (card.firstElementChild ?? card).getBoundingClientRect();
       return {
         top: rect.top,
         bottom: rect.bottom,
@@ -302,6 +308,55 @@ async function expectNoCardTrailingGap(page: Page) {
     expect(trailingGap).toBeGreaterThanOrEqual(0);
     expect(trailingGap).toBeLessThanOrEqual(18);
   }
+}
+
+async function expectNoCardSlotTrailingGap(page: Page) {
+  const trailingGaps = await page.getByTestId("stop-card").evaluateAll((cards) =>
+    cards.map((card) => {
+      const shell = card.firstElementChild;
+      const slotRect = card.getBoundingClientRect();
+      const shellRect = shell?.getBoundingClientRect();
+      return Math.round(slotRect.bottom - (shellRect?.bottom ?? slotRect.bottom));
+    }),
+  );
+
+  for (const trailingGap of trailingGaps) {
+    expect(trailingGap).toBeGreaterThanOrEqual(0);
+    expect(trailingGap).toBeLessThanOrEqual(6);
+  }
+}
+
+async function expectStackedLeadersAttachToVisibleCards(page: Page, metrics: Awaited<ReturnType<typeof getLayoutMetrics>>) {
+  const cards = await page.getByTestId("stop-card").evaluateAll((elements) =>
+    elements.map((element) => {
+      const rect = (element.firstElementChild ?? element).getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+      };
+    }),
+  );
+
+  const ribbons = await page.getByTestId("leader-ribbon").evaluateAll((polygons) =>
+    polygons.map((polygon) => {
+      const points = (polygon.getAttribute("points") ?? "")
+        .trim()
+        .split(/\s+/)
+        .map((pair) => pair.split(",").map(Number));
+      return {
+        minY: Math.min(...points.map((point) => point[1])),
+        maxY: Math.max(...points.map((point) => point[1])),
+      };
+    }),
+  );
+
+  cards.forEach((card, index) => {
+    if (card.bottom <= metrics.mapTop + 1) {
+      expect(Math.abs(ribbons[index].minY - card.bottom)).toBeLessThanOrEqual(2);
+    } else if (card.top >= metrics.mapBottom - 1) {
+      expect(Math.abs(ribbons[index].maxY - card.top)).toBeLessThanOrEqual(2);
+    }
+  });
 }
 
 async function getFitEvents(page: Page) {

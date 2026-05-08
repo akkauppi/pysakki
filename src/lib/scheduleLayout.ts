@@ -14,8 +14,8 @@ export type StackedLayoutMetrics = {
   departureRows: number;
 };
 
-const stackedPhoneCardBaseHeight = 152;
-const stackedPhoneExtraRowHeight = 69;
+const stackedPhoneCardBaseHeight = 145;
+const stackedPhoneExtraRowHeight = 76;
 const stackedPhoneTopChromeHeight = 64;
 const stackedPhoneBottomChromeHeight = 18;
 
@@ -77,6 +77,25 @@ export function getStackedLayoutMetrics(
 
   // 1-2 stops: Single board at the top.
   const landscape = screenSize.height < screenSize.width;
+  const departureRows = getStackedPhoneDepartureRows(screenSize);
+  if (!landscape) {
+    const availableHeight = Math.max(1, effectiveHeight - gridGap);
+    const boardHeight = stackedPhoneCardBaseHeight;
+    const topPanelHeight = boardHeight + stackedPhoneTopChromeHeight;
+    const mapHeight = Math.max(1, availableHeight - topPanelHeight);
+    const topBoardRatio = topPanelHeight / availableHeight;
+    const mapRatio = mapHeight / availableHeight;
+
+    return {
+      mapRatio,
+      topBoardRatio,
+      bottomBoardRatio: 0,
+      gridTemplateRows: `minmax(0, ${topBoardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr)`,
+      scheduleBoardHeight: boardHeight,
+      departureRows,
+    };
+  }
+
   const mapRatio = landscape ? 0.62 : stopCount <= 2 ? 0.65 : 0.62;
   const boardRatio = 1 - mapRatio;
   const totalGaps = gridGap;
@@ -88,7 +107,7 @@ export function getStackedLayoutMetrics(
     bottomBoardRatio: 0,
     gridTemplateRows: `minmax(0, ${boardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr)`,
     scheduleBoardHeight: boardHeight,
-    departureRows: getStackedPhoneDepartureRows(screenSize),
+    departureRows,
   };
 }
 

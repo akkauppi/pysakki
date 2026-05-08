@@ -4,20 +4,18 @@ import {
   getStackedLayoutMetrics,
 } from "../src/lib/scheduleLayout";
 
-test("allocates most of 1-2 stop stacked layouts to the map", () => {
+test("sizes 1-2 stop stacked layouts to the card content and gives the rest to the map", () => {
   const metrics = getStackedLayoutMetrics(2, { width: 390, height: 844 }, false);
 
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.62);
-  expect(metrics.mapRatio).toBeLessThanOrEqual(0.66);
-  // Accurate calculation: (844 - 16 appPadding - 8 gap) * (1 - 0.65 mapRatio)
-  expect(metrics.scheduleBoardHeight).toBeCloseTo(287, 0);
+  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.72);
+  expect(metrics.scheduleBoardHeight).toBeCloseTo(145, 0);
 });
 
 test("reserves enough split stacked schedule space for two full rows", () => {
   const metrics = getStackedLayoutMetrics(4, { width: 390, height: 640 }, true);
 
   expect(metrics.departureRows).toBe(2);
-  expect(metrics.scheduleBoardHeight).toBeCloseTo(170, 0);
+  expect(metrics.scheduleBoardHeight).toBeCloseTo(163, 0);
   expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.3);
   expect(metrics.topBoardRatio).toBeGreaterThan(metrics.bottomBoardRatio);
 });
