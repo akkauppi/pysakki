@@ -23,12 +23,19 @@ export type StackedLayoutMetrics = {
   scheduleBoardHeight: number;
 };
 
+/**
+ * Calculates the responsive grid layout metrics for the stacked (mobile/portrait) kiosk view.
+ * 
+ * In stacked mode, we prioritize the map context (60-65% of screen) and distribute the remaining
+ * space to one or two schedule boards.
+ */
 export function getStackedLayoutMetrics(
   stopCount: number,
   screenSize: ScreenSize,
   splitStackedSchedules: boolean,
 ): StackedLayoutMetrics {
   if (splitStackedSchedules) {
+    // 3-4 stops: Split into top and bottom boards to avoid crossing leader lines.
     const mapRatio = screenSize.height < 700 ? 0.57 : 0.59;
     const boardRatio = (1 - mapRatio) / 2;
     return {
@@ -40,6 +47,7 @@ export function getStackedLayoutMetrics(
     };
   }
 
+  // 1-2 stops: Single board at the top, map taking the rest.
   const landscape = screenSize.height < screenSize.width;
   const mapRatio = landscape ? 0.62 : stopCount <= 2 ? 0.65 : 0.62;
   const boardRatio = 1 - mapRatio;
@@ -72,6 +80,16 @@ export function getAppGridStyle({
   };
 }
 
+/**
+ * The core "fitting" engine. It iteratively finds the best row variant and departure count
+ * that fits within the available pixel budget without clipping.
+ * 
+ * Priority:
+ * 1. High row count with full details ("full" variant)
+ * 2. High row count with compact icons ("compactIcon" variant)
+ * 3. Falling back to simple text rows ("compact" variant)
+ * 4. Reducing row count if still not fitting
+ */
 export function getScheduleFit(
   stopCount: number,
   maxDepartureCount: number,
