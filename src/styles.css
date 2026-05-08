@@ -58,7 +58,8 @@ body {
 .departure-list {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 0 0 auto;
+  height: auto;
   overflow: hidden;
   gap: 0.5cqh;
 }
@@ -86,8 +87,39 @@ body {
 
 /* Container Queries for Adaptive Details */
 
+@container (height < 80px) {
+  .stop-card-shell {
+    padding: 0.25rem !important;
+    border-radius: 0.75rem !important;
+  }
+  .stop-card-header {
+    display: none !important;
+  }
+  .departure-list {
+    gap: 0 !important;
+  }
+  .departure-row {
+    height: clamp(24px, 62cqh, 32px) !important;
+    padding: 0 0.3rem !important;
+    border-width: 0 !important;
+  }
+  .departure-mode-icon,
+  .departure-headsign,
+  .departure-scheduled-time {
+    display: none !important;
+  }
+  .departure-route {
+    font-size: 0.74rem !important;
+    line-height: 1 !important;
+  }
+  .departure-relative-time {
+    font-size: 0.82rem !important;
+    line-height: 1 !important;
+  }
+}
+
 /* Very short cards (e.g. 4 stops on mobile) */
-@container (height < 140px) {
+@container (height >= 80px) and (height < 140px) {
   .min-departure-card > div:first-child {
     margin-bottom: 0.2rem !important;
   }

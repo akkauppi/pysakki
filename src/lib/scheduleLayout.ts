@@ -11,7 +11,25 @@ export type StackedLayoutMetrics = {
   bottomBoardRatio: number;
   gridTemplateRows: string;
   scheduleBoardHeight: number;
+  departureRows: number;
 };
+
+const stackedPhoneCardBaseHeight = 152;
+const stackedPhoneExtraRowHeight = 69;
+const stackedPhoneTopChromeHeight = 64;
+const stackedPhoneBottomChromeHeight = 18;
+
+export function getStackedPhoneDepartureRows(screenSize: ScreenSize) {
+  if (screenSize.height < 760) {
+    return 2;
+  }
+
+  if (screenSize.height < 1280) {
+    return 3;
+  }
+
+  return 4;
+}
 
 /**
  * Calculates the responsive grid layout metrics for the stacked (mobile/portrait) kiosk view.
@@ -31,18 +49,20 @@ export function getStackedLayoutMetrics(
   if (splitStackedSchedules) {
     const totalGaps = gridGap * 2;
     const availableHeight = Math.max(1, effectiveHeight - totalGaps);
-    const minimumTopBoardHeight = 260;
-    const minimumBottomBoardHeight = 210;
+    const departureRows = getStackedPhoneDepartureRows(screenSize);
+    const cardHeight = stackedPhoneCardBaseHeight + (departureRows - 2) * stackedPhoneExtraRowHeight;
+    const topBoardHeight = cardHeight + stackedPhoneTopChromeHeight;
+    const bottomBoardHeight = cardHeight + stackedPhoneBottomChromeHeight;
     const minimumMapHeight = 120;
-    const reservedHeight = minimumTopBoardHeight + minimumBottomBoardHeight + minimumMapHeight;
-    const extraHeight = Math.max(0, availableHeight - reservedHeight);
-    const scale = availableHeight < reservedHeight ? availableHeight / reservedHeight : 1;
-
-    const topBoardHeight = minimumTopBoardHeight * scale + extraHeight * 0.15;
-    const bottomBoardHeight = minimumBottomBoardHeight * scale + extraHeight * 0.15;
-    const mapHeight = Math.max(1, availableHeight - topBoardHeight - bottomBoardHeight);
-    const topBoardRatio = topBoardHeight / availableHeight;
-    const bottomBoardRatio = bottomBoardHeight / availableHeight;
+    const scheduleHeight = topBoardHeight + bottomBoardHeight;
+    const scale = availableHeight < scheduleHeight + minimumMapHeight
+      ? Math.max(0.72, (availableHeight - minimumMapHeight) / scheduleHeight)
+      : 1;
+    const effectiveTopBoardHeight = topBoardHeight * scale;
+    const effectiveBottomBoardHeight = bottomBoardHeight * scale;
+    const mapHeight = Math.max(1, availableHeight - effectiveTopBoardHeight - effectiveBottomBoardHeight);
+    const topBoardRatio = effectiveTopBoardHeight / availableHeight;
+    const bottomBoardRatio = effectiveBottomBoardHeight / availableHeight;
     const mapRatio = mapHeight / availableHeight;
 
     return {
@@ -50,7 +70,8 @@ export function getStackedLayoutMetrics(
       topBoardRatio,
       bottomBoardRatio,
       gridTemplateRows: `minmax(0, ${topBoardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr) minmax(0, ${bottomBoardRatio.toFixed(3)}fr)`,
-      scheduleBoardHeight: Math.min(topBoardHeight, bottomBoardHeight),
+      scheduleBoardHeight: Math.min(effectiveTopBoardHeight, effectiveBottomBoardHeight),
+      departureRows,
     };
   }
 
@@ -67,6 +88,7 @@ export function getStackedLayoutMetrics(
     bottomBoardRatio: 0,
     gridTemplateRows: `minmax(0, ${boardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr)`,
     scheduleBoardHeight: boardHeight,
+    departureRows: getStackedPhoneDepartureRows(screenSize),
   };
 }
 

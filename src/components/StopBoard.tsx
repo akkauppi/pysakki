@@ -17,6 +17,7 @@ export function StopBoard({
   testId,
   stopCardRefs,
   minDepartureRows = 1,
+  maxDepartureRows,
 }: {
   stops: StopWithDepartures[];
   allDisplayStops: StopWithDepartures[];
@@ -24,6 +25,7 @@ export function StopBoard({
   testId: string;
   stopCardRefs: RefObject<Map<string, HTMLElement>>;
   minDepartureRows?: number;
+  maxDepartureRows?: number;
 }) {
   return (
     <div
@@ -41,6 +43,7 @@ export function StopBoard({
             displayIndex={displayIndex}
             stopCardRefs={stopCardRefs}
             minDepartureRows={minDepartureRows}
+            maxDepartureRows={maxDepartureRows}
           />
         );
       })}
@@ -53,18 +56,20 @@ function StopCard({
   displayIndex,
   stopCardRefs,
   minDepartureRows,
+  maxDepartureRows,
 }: {
   stop: StopWithDepartures;
   displayIndex: number;
   stopCardRefs: RefObject<Map<string, HTMLElement>>;
   minDepartureRows: number;
+  maxDepartureRows?: number;
 }) {
   const color = STOP_MARKER_COLORS[displayIndex] ?? "#ffffff";
   const leaderId = getLeaderId(stop, displayIndex);
   
-  const initialDepartureCount = Math.min(6, stop.departures.length);
+  const initialDepartureCount = Math.min(maxDepartureRows ?? 6, 6, stop.departures.length);
   const minimumDepartureCount = Math.min(minDepartureRows, initialDepartureCount);
-  const { containerRef: listRef, visibleCount } = useAutoFit(initialDepartureCount, {
+  const { containerRef: cardShellRef, visibleCount } = useAutoFit(initialDepartureCount, {
     minCount: minimumDepartureCount,
   });
   
@@ -81,15 +86,16 @@ function StopCard({
     >
       <div
         ref={(element) => {
+          cardShellRef.current = element;
           registerStopCardRef(stopCardRefs, leaderId, element);
         }}
         className={cn(
-          "flex h-full min-h-0 flex-col overflow-hidden border backdrop-blur-xl rounded-[1.5rem] p-3 sm:p-4",
+          "stop-card-shell flex max-h-full min-h-0 flex-col overflow-hidden border backdrop-blur-xl rounded-[1.5rem] p-3 sm:p-4",
           minDepartureRows >= 2 && "min-departure-card",
         )}
         style={getStopCardStyle(color)}
       >
-        <div className="mb-2 flex items-start gap-2">
+        <div className="stop-card-header mb-2 flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -110,8 +116,7 @@ function StopCard({
         </div>
 
         <div
-          ref={listRef as RefObject<HTMLDivElement>}
-          className="departure-list flex-1 min-h-0"
+          className="departure-list min-h-0"
           data-testid="departure-list"
           data-visible-departures={String(visibleCount)}
         >

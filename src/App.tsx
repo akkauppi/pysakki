@@ -32,6 +32,7 @@ import {
 } from "./lib/urlState";
 import {
   getAppGridStyle,
+  getStackedPhoneDepartureRows,
   getStopBoardLayout,
 } from "./lib/scheduleLayout";
 import { useLeaderOverlay } from "./hooks/useLeaderOverlay";
@@ -116,7 +117,9 @@ export default function App() {
     
   const topDisplayStops = splitStackedSchedules ? displayStops.slice(0, 2) : displayStops;
   const bottomDisplayStops = splitStackedSchedules ? displayStops.slice(2) : [];
-  const minDepartureRows = isStackedLayout && overlaySize.height >= overlaySize.width ? 2 : 1;
+  const isStackedPhonePortrait = isStackedLayout && overlaySize.height >= overlaySize.width;
+  const minDepartureRows = isStackedPhonePortrait ? 2 : 1;
+  const maxDepartureRows = isStackedPhonePortrait ? getStackedPhoneDepartureRows(overlaySize) : undefined;
   
   const topStopBoardLayout = getStopBoardLayout(topDisplayStops.length, isStackedLayout);
   const bottomStopBoardLayout = getStopBoardLayout(bottomDisplayStops.length, isStackedLayout);
@@ -323,6 +326,7 @@ export default function App() {
                 testId="stop-board"
                 stopCardRefs={stopCardRefs}
                 minDepartureRows={minDepartureRows}
+                maxDepartureRows={maxDepartureRows}
               />
             )}
           </div>
@@ -371,6 +375,7 @@ export default function App() {
               testId="bottom-stop-board"
               stopCardRefs={stopCardRefs}
               minDepartureRows={minDepartureRows}
+              maxDepartureRows={maxDepartureRows}
             />
           </section>
         ) : null}

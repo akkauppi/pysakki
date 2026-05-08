@@ -18,6 +18,8 @@ test("gives the map most of a 2-stop stacked phone layout without clipping cards
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(0);
   await expect(page.getByTestId("leader-3d")).toHaveCount(2);
   await expectMinimumDepartureRowsPerCard(page, 2);
+  await expectNoDepartureListTrailingGap(page);
+  await expectNoCardTrailingGap(page);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -38,6 +40,8 @@ test("routes 3-stop split stacked leaders between top cards, map, and bottom car
   expect(cardRects[2].width).toBeGreaterThan(cardRects[0].width * 1.5);
 
   await expectMinimumDepartureRowsPerCard(page, 2);
+  await expectNoDepartureListTrailingGap(page);
+  await expectNoCardTrailingGap(page);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -50,6 +54,8 @@ test("keeps 4-stop split stacked usable on a short phone", async ({ page }) => {
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(1);
   await expect(page.getByTestId("leader-ribbon")).toHaveCount(4);
   await expectMinimumDepartureRowsPerCard(page, 2);
+  await expectNoDepartureListTrailingGap(page);
+  await expectNoCardTrailingGap(page);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -61,6 +67,8 @@ test("keeps 4-stop stacked landscape map dominant while cards stay linked", asyn
   expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.58);
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(0);
   await expect(page.getByTestId("leader-ribbon")).toHaveCount(4);
+  await expectNoDepartureListTrailingGap(page);
+  await expectNoCardTrailingGap(page);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -103,6 +111,8 @@ test("keeps desktop leaders attached to the card edge", async ({ page }) => {
   }
 
   await expectNoCardOverflow(page);
+  await expectNoDepartureListTrailingGap(page);
+  await expectNoCardTrailingGap(page);
   await expectNoRowOverflow(page);
 });
 
@@ -258,6 +268,39 @@ async function expectMinimumDepartureRowsPerCard(page: Page, minimumRows: number
 
   for (const rowCount of rowCounts) {
     expect(rowCount).toBeGreaterThanOrEqual(minimumRows);
+  }
+}
+
+async function expectNoDepartureListTrailingGap(page: Page) {
+  const trailingGaps = await page.getByTestId("departure-list").evaluateAll((lists) =>
+    lists.map((list) => {
+      const rows = Array.from(list.querySelectorAll('[data-testid="departure-row"]'));
+      const listRect = list.getBoundingClientRect();
+      const lastRowRect = rows.at(-1)?.getBoundingClientRect();
+      return Math.round(listRect.bottom - (lastRowRect?.bottom ?? listRect.top));
+    }),
+  );
+
+  for (const trailingGap of trailingGaps) {
+    expect(trailingGap).toBeGreaterThanOrEqual(0);
+    expect(trailingGap).toBeLessThanOrEqual(4);
+  }
+}
+
+async function expectNoCardTrailingGap(page: Page) {
+  const trailingGaps = await page.getByTestId("stop-card").evaluateAll((cards) =>
+    cards.map((card) => {
+      const shell = card.firstElementChild;
+      const rows = Array.from(card.querySelectorAll('[data-testid="departure-row"]'));
+      const shellRect = shell?.getBoundingClientRect();
+      const lastRowRect = rows.at(-1)?.getBoundingClientRect();
+      return Math.round((shellRect?.bottom ?? 0) - (lastRowRect?.bottom ?? 0));
+    }),
+  );
+
+  for (const trailingGap of trailingGaps) {
+    expect(trailingGap).toBeGreaterThanOrEqual(0);
+    expect(trailingGap).toBeLessThanOrEqual(18);
   }
 }
 
