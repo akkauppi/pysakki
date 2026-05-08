@@ -109,8 +109,6 @@ export default function App() {
 
   const splitStackedSchedules =
     isStackedLayout &&
-    overlaySize.height >= 600 &&
-    overlaySize.height >= overlaySize.width &&
     !setupMode &&
     !editMode &&
     displayStops.length >= 3;

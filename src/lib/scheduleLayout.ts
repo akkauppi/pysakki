@@ -18,6 +18,7 @@ const stackedPhoneCardBaseHeight = 145;
 const stackedPhoneExtraRowHeight = 76;
 const stackedPhoneTopChromeHeight = 64;
 const stackedPhoneBottomChromeHeight = 18;
+const stackedLandscapeCardHeight = 110;
 
 export function getStackedPhoneDepartureRows(screenSize: ScreenSize) {
   if (screenSize.height < 760) {
@@ -50,7 +51,10 @@ export function getStackedLayoutMetrics(
     const totalGaps = gridGap * 2;
     const availableHeight = Math.max(1, effectiveHeight - totalGaps);
     const departureRows = getStackedPhoneDepartureRows(screenSize);
-    const cardHeight = stackedPhoneCardBaseHeight + (departureRows - 2) * stackedPhoneExtraRowHeight;
+    const landscape = screenSize.height < screenSize.width;
+    const cardHeight = landscape
+      ? stackedLandscapeCardHeight
+      : stackedPhoneCardBaseHeight + (departureRows - 2) * stackedPhoneExtraRowHeight;
     const topBoardHeight = cardHeight + stackedPhoneTopChromeHeight;
     const bottomBoardHeight = cardHeight + stackedPhoneBottomChromeHeight;
     const minimumMapHeight = 120;

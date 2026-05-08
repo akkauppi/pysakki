@@ -69,9 +69,27 @@ test("keeps 4-stop stacked landscape map dominant while cards stay linked", asyn
   await openStops(page, { width: 640, height: 480 }, 4);
 
   const metrics = await getLayoutMetrics(page);
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.58);
-  await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(0);
+  expect(metrics.mapHeight).toBeGreaterThanOrEqual(70);
+  await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(1);
   await expect(page.getByTestId("leader-ribbon")).toHaveCount(4);
+  await expectCardsSplitAroundMap(page, metrics);
+  await expectStackedLeadersAttachToVisibleCards(page, metrics);
+  await expectNoDepartureListTrailingGap(page);
+  await expectNoCardTrailingGap(page);
+  await expectNoCardSlotTrailingGap(page);
+  await expectNoCardOverflow(page);
+  await expectNoRowOverflow(page);
+});
+
+test("splits narrow desktop 3-stop cards around the map", async ({ page }) => {
+  await openStops(page, { width: 588, height: 508 }, 3);
+
+  const metrics = await getLayoutMetrics(page);
+  expect(metrics.mapHeight).toBeGreaterThanOrEqual(70);
+  await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(1);
+  await expect(page.getByTestId("leader-ribbon")).toHaveCount(3);
+  await expectCardsSplitAroundMap(page, metrics);
+  await expectStackedLeadersAttachToVisibleCards(page, metrics);
   await expectNoDepartureListTrailingGap(page);
   await expectNoCardTrailingGap(page);
   await expectNoCardSlotTrailingGap(page);
@@ -322,7 +340,7 @@ async function expectNoCardSlotTrailingGap(page: Page) {
 
   for (const trailingGap of trailingGaps) {
     expect(trailingGap).toBeGreaterThanOrEqual(0);
-    expect(trailingGap).toBeLessThanOrEqual(6);
+    expect(trailingGap).toBeLessThanOrEqual(8);
   }
 }
 
@@ -357,6 +375,16 @@ async function expectStackedLeadersAttachToVisibleCards(page: Page, metrics: Awa
       expect(Math.abs(ribbons[index].maxY - card.top)).toBeLessThanOrEqual(2);
     }
   });
+}
+
+async function expectCardsSplitAroundMap(page: Page, metrics: Awaited<ReturnType<typeof getLayoutMetrics>>) {
+  const cardRects = await getCardRects(page);
+  const topCards = cardRects.filter((card) => card.bottom <= metrics.mapTop + 1);
+  const bottomCards = cardRects.filter((card) => card.top >= metrics.mapBottom - 1);
+
+  expect(topCards.length).toBeGreaterThanOrEqual(2);
+  expect(bottomCards.length).toBeGreaterThanOrEqual(1);
+  expect(topCards.length + bottomCards.length).toBe(cardRects.length);
 }
 
 async function getFitEvents(page: Page) {

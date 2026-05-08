@@ -25,3 +25,10 @@ test("caps phone portrait departure rows deterministically by height", () => {
   expect(getStackedPhoneDepartureRows({ width: 390, height: 844 })).toBe(3);
   expect(getStackedPhoneDepartureRows({ width: 720, height: 1600 })).toBe(4);
 });
+
+test("keeps narrow landscape split bands content-sized", () => {
+  const metrics = getStackedLayoutMetrics(3, { width: 588, height: 508 }, true);
+
+  expect(metrics.scheduleBoardHeight).toBeCloseTo(128, 0);
+  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.35);
+});
