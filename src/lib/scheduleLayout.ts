@@ -16,8 +16,8 @@ export type StackedLayoutMetrics = {
 /**
  * Calculates the responsive grid layout metrics for the stacked (mobile/portrait) kiosk view.
  * 
- * In stacked mode, we prioritize the map context (60-65% of screen) and distribute the remaining
- * space to one or two schedule boards.
+ * In stacked mode, split phone portraits reserve enough schedule space for two
+ * full departure rows before assigning the remaining height to the map.
  */
 export function getStackedLayoutMetrics(
   stopCount: number,
@@ -29,18 +29,28 @@ export function getStackedLayoutMetrics(
   const effectiveHeight = screenSize.height - appPadding;
 
   if (splitStackedSchedules) {
-    // 3-4 stops: Split into top and bottom boards.
-    const mapRatio = screenSize.height < 700 ? 0.48 : 0.50;
-    const boardRatio = (1 - mapRatio) / 2;
     const totalGaps = gridGap * 2;
-    const boardHeight = (effectiveHeight - totalGaps) * boardRatio;
+    const availableHeight = Math.max(1, effectiveHeight - totalGaps);
+    const minimumTopBoardHeight = 260;
+    const minimumBottomBoardHeight = 210;
+    const minimumMapHeight = 120;
+    const reservedHeight = minimumTopBoardHeight + minimumBottomBoardHeight + minimumMapHeight;
+    const extraHeight = Math.max(0, availableHeight - reservedHeight);
+    const scale = availableHeight < reservedHeight ? availableHeight / reservedHeight : 1;
+
+    const topBoardHeight = minimumTopBoardHeight * scale + extraHeight * 0.15;
+    const bottomBoardHeight = minimumBottomBoardHeight * scale + extraHeight * 0.15;
+    const mapHeight = Math.max(1, availableHeight - topBoardHeight - bottomBoardHeight);
+    const topBoardRatio = topBoardHeight / availableHeight;
+    const bottomBoardRatio = bottomBoardHeight / availableHeight;
+    const mapRatio = mapHeight / availableHeight;
 
     return {
       mapRatio,
-      topBoardRatio: boardRatio,
-      bottomBoardRatio: boardRatio,
-      gridTemplateRows: `minmax(0, ${boardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr) minmax(0, ${boardRatio.toFixed(3)}fr)`,
-      scheduleBoardHeight: boardHeight,
+      topBoardRatio,
+      bottomBoardRatio,
+      gridTemplateRows: `minmax(0, ${topBoardRatio.toFixed(3)}fr) minmax(0, ${mapRatio.toFixed(3)}fr) minmax(0, ${bottomBoardRatio.toFixed(3)}fr)`,
+      scheduleBoardHeight: Math.min(topBoardHeight, bottomBoardHeight),
     };
   }
 

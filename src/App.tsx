@@ -116,6 +116,7 @@ export default function App() {
     
   const topDisplayStops = splitStackedSchedules ? displayStops.slice(0, 2) : displayStops;
   const bottomDisplayStops = splitStackedSchedules ? displayStops.slice(2) : [];
+  const minDepartureRows = isStackedLayout && overlaySize.height >= overlaySize.width ? 2 : 1;
   
   const topStopBoardLayout = getStopBoardLayout(topDisplayStops.length, isStackedLayout);
   const bottomStopBoardLayout = getStopBoardLayout(bottomDisplayStops.length, isStackedLayout);
@@ -321,6 +322,7 @@ export default function App() {
                 layout={splitStackedSchedules ? topStopBoardLayout : topStopBoardLayout}
                 testId="stop-board"
                 stopCardRefs={stopCardRefs}
+                minDepartureRows={minDepartureRows}
               />
             )}
           </div>
@@ -368,6 +370,7 @@ export default function App() {
               layout={bottomStopBoardLayout}
               testId="bottom-stop-board"
               stopCardRefs={stopCardRefs}
+              minDepartureRows={minDepartureRows}
             />
           </section>
         ) : null}

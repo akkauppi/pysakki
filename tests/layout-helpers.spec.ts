@@ -12,11 +12,10 @@ test("allocates most of 1-2 stop stacked layouts to the map", () => {
   expect(metrics.scheduleBoardHeight).toBeCloseTo(287, 0);
 });
 
-test("allocates most of split stacked layouts to the map", () => {
+test("reserves enough split stacked schedule space for two full rows", () => {
   const metrics = getStackedLayoutMetrics(4, { width: 390, height: 640 }, true);
 
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.48);
-  expect(metrics.mapRatio).toBeLessThanOrEqual(0.55);
-  expect(metrics.topBoardRatio).toBeCloseTo(metrics.bottomBoardRatio, 3);
+  expect(metrics.scheduleBoardHeight).toBeGreaterThanOrEqual(210);
+  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.2);
+  expect(metrics.topBoardRatio).toBeGreaterThan(metrics.bottomBoardRatio);
 });
-

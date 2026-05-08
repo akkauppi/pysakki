@@ -16,12 +16,14 @@ export function StopBoard({
   layout,
   testId,
   stopCardRefs,
+  minDepartureRows = 1,
 }: {
   stops: StopWithDepartures[];
   allDisplayStops: StopWithDepartures[];
   layout: CSSProperties;
   testId: string;
   stopCardRefs: RefObject<Map<string, HTMLElement>>;
+  minDepartureRows?: number;
 }) {
   return (
     <div
@@ -38,6 +40,7 @@ export function StopBoard({
             stop={stop}
             displayIndex={displayIndex}
             stopCardRefs={stopCardRefs}
+            minDepartureRows={minDepartureRows}
           />
         );
       })}
@@ -49,16 +52,21 @@ function StopCard({
   stop,
   displayIndex,
   stopCardRefs,
+  minDepartureRows,
 }: {
   stop: StopWithDepartures;
   displayIndex: number;
   stopCardRefs: RefObject<Map<string, HTMLElement>>;
+  minDepartureRows: number;
 }) {
   const color = STOP_MARKER_COLORS[displayIndex] ?? "#ffffff";
   const leaderId = getLeaderId(stop, displayIndex);
   
-  // Try to render as many as 6 departures initially, then auto-shrink
-  const { containerRef: listRef, visibleCount } = useAutoFit(6);
+  const initialDepartureCount = Math.min(6, stop.departures.length);
+  const minimumDepartureCount = Math.min(minDepartureRows, initialDepartureCount);
+  const { containerRef: listRef, visibleCount } = useAutoFit(initialDepartureCount, {
+    minCount: minimumDepartureCount,
+  });
   
   const directionHint = formatStopDirectionHint(stop);
   const metadataDirection = stop.code && directionHint?.startsWith(stop.code)
@@ -77,6 +85,7 @@ function StopCard({
         }}
         className={cn(
           "flex h-full min-h-0 flex-col overflow-hidden border backdrop-blur-xl rounded-[1.5rem] p-3 sm:p-4",
+          minDepartureRows >= 2 && "min-departure-card",
         )}
         style={getStopCardStyle(color)}
       >

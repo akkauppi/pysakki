@@ -75,15 +75,35 @@ body {
   overflow: hidden;
 }
 
+.min-departure-card {
+  padding: clamp(0.35rem, 1.8cqh, 0.75rem) !important;
+  border-radius: 1rem !important;
+}
+
+.min-departure-card .departure-list {
+  gap: clamp(2px, 0.6cqh, 6px);
+}
+
 /* Container Queries for Adaptive Details */
 
 /* Very short cards (e.g. 4 stops on mobile) */
 @container (height < 140px) {
+  .min-departure-card > div:first-child {
+    margin-bottom: 0.2rem !important;
+  }
+  .min-departure-card .stop-card-name {
+    font-size: 0.78rem !important;
+    line-height: 1 !important;
+  }
+  .min-departure-card .stop-card-meta {
+    font-size: 0.62rem !important;
+    line-height: 1 !important;
+  }
   .departure-list {
     gap: 0 !important;
   }
   .departure-row {
-    height: clamp(24px, 30cqh, 44px) !important;
+    height: clamp(24px, 26cqh, 38px) !important;
     padding: 0 0.25rem !important;
     gap: 0.15rem !important;
     overflow: hidden !important;
@@ -114,6 +134,29 @@ body {
   }
 }
 
+@container (height >= 140px) and (height < 180px) {
+  .min-departure-card > div:first-child {
+    margin-bottom: 0.25rem !important;
+  }
+  .min-departure-card .departure-row {
+    height: clamp(42px, 28cqh, 48px) !important;
+    padding: 0 0.45rem !important;
+  }
+  .min-departure-card .departure-mode-icon,
+  .min-departure-card .departure-headsign,
+  .min-departure-card .departure-scheduled-time {
+    display: none !important;
+  }
+  .min-departure-card .departure-route {
+    font-size: 0.8rem !important;
+    line-height: 1 !important;
+  }
+  .min-departure-card .departure-relative-time {
+    font-size: 0.9rem !important;
+    line-height: 1 !important;
+  }
+}
+
 
 /* Medium cards */
 @container (height >= 140px) and (height < 240px) {
@@ -123,6 +166,12 @@ body {
   }
   .departure-scheduled-time {
     display: none;
+  }
+}
+
+@container (height >= 180px) and (height < 240px) {
+  .min-departure-card .departure-row {
+    height: clamp(50px, 22cqh, 54px) !important;
   }
 }
 

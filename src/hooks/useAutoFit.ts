@@ -5,10 +5,15 @@ import { useRef, useState, useLayoutEffect } from "react";
  * to fit as many items as possible.
  * 
  * @param initialCount The starting number of items to try to render
- * @param bufferPixels Optional safety margin
+ * @param options Optional minimum count and safety margin
  * @returns {ref, visibleCount}
  */
-export function useAutoFit(initialCount: number, bufferPixels = 4) {
+export function useAutoFit(
+  initialCount: number,
+  options: { minCount?: number; bufferPixels?: number } = {},
+) {
+  const minCount = Math.min(Math.max(options.minCount ?? 1, 0), initialCount);
+  const bufferPixels = options.bufferPixels ?? 4;
   const [visibleCount, setVisibleCount] = useState(initialCount);
   const containerRef = useRef<HTMLElement | null>(null);
   const lastDimensions = useRef({ width: 0, height: 0 });
@@ -22,8 +27,8 @@ export function useAutoFit(initialCount: number, bufferPixels = 4) {
       const hasVerticalOverflow = scrollHeight > clientHeight + bufferPixels;
       const hasHorizontalOverflow = scrollWidth > clientWidth + bufferPixels;
 
-      if (hasVerticalOverflow && visibleCount > 1) {
-        setVisibleCount((prev) => prev - 1);
+      if (hasVerticalOverflow && visibleCount > minCount) {
+        setVisibleCount((prev) => Math.max(minCount, prev - 1));
       } else if (!hasVerticalOverflow && !hasHorizontalOverflow && visibleCount < initialCount) {
         // Optimistically try to add one back if we have space
         // This is a bit tricky to do without oscillation, so we only do it
@@ -51,7 +56,7 @@ export function useAutoFit(initialCount: number, bufferPixels = 4) {
     checkOverflow();
 
     return () => observer.disconnect();
-  }, [initialCount, visibleCount, bufferPixels]);
+  }, [initialCount, visibleCount, minCount, bufferPixels]);
 
   return { containerRef, visibleCount };
 }

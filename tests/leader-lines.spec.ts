@@ -17,7 +17,9 @@ test("gives the map most of a 2-stop stacked phone layout without clipping cards
 
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(0);
   await expect(page.getByTestId("leader-3d")).toHaveCount(2);
+  await expectMinimumDepartureRowsPerCard(page, 2);
   await expectNoCardOverflow(page);
+  await expectNoRowOverflow(page);
 });
 
 test("routes 3-stop split stacked leaders between top cards, map, and bottom card", async ({ page }) => {
@@ -27,8 +29,7 @@ test("routes 3-stop split stacked leaders between top cards, map, and bottom car
   await expect(page.getByTestId("leader-3d")).toHaveCount(3);
 
   const metrics = await getLayoutMetrics(page);
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.48);
-  expect(metrics.mapHeight).toBeGreaterThan(metrics.topPanelHeight * 1.8);
+  expect(metrics.mapHeight).toBeGreaterThanOrEqual(120);
 
   const cardRects = await getCardRects(page);
   expect(cardRects[0].bottom).toBeLessThanOrEqual(metrics.mapTop + 1);
@@ -36,17 +37,19 @@ test("routes 3-stop split stacked leaders between top cards, map, and bottom car
   expect(cardRects[2].top).toBeGreaterThanOrEqual(metrics.mapBottom - 1);
   expect(cardRects[2].width).toBeGreaterThan(cardRects[0].width * 1.5);
 
+  await expectMinimumDepartureRowsPerCard(page, 2);
   await expectNoCardOverflow(page);
+  await expectNoRowOverflow(page);
 });
 
 test("keeps 4-stop split stacked usable on a short phone", async ({ page }) => {
   await openStops(page, { width: 390, height: 640 }, 4);
 
   const metrics = await getLayoutMetrics(page);
-  expect(metrics.mapRatio).toBeGreaterThanOrEqual(0.44);
-  expect(metrics.mapRatio).toBeLessThanOrEqual(0.55);
+  expect(metrics.mapHeight).toBeGreaterThanOrEqual(120);
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(1);
   await expect(page.getByTestId("leader-ribbon")).toHaveCount(4);
+  await expectMinimumDepartureRowsPerCard(page, 2);
   await expectNoCardOverflow(page);
   await expectNoRowOverflow(page);
 });
@@ -59,6 +62,7 @@ test("keeps 4-stop stacked landscape map dominant while cards stay linked", asyn
   await expect(page.getByTestId("bottom-stop-panel")).toHaveCount(0);
   await expect(page.getByTestId("leader-ribbon")).toHaveCount(4);
   await expectNoCardOverflow(page);
+  await expectNoRowOverflow(page);
 });
 
 test("keeps desktop leaders attached to the card edge", async ({ page }) => {
@@ -97,6 +101,9 @@ test("keeps desktop leaders attached to the card edge", async ({ page }) => {
     expect(ribbons[index].maxX).toBeGreaterThan(cards[index].right + 20);
     expect(Math.abs(ribbons[index].leftEdgeCenterY - cards[index].centerY)).toBeLessThanOrEqual(4);
   }
+
+  await expectNoCardOverflow(page);
+  await expectNoRowOverflow(page);
 });
 
 test("waits for map idle before returning a manually moved map to selected stops", async ({ page }) => {
@@ -223,9 +230,8 @@ async function expectNoCardOverflow(page: Page) {
   );
 
   for (const card of overflow) {
-    // Allow for sub-pixel rounding and dynamic padding in autonomous layouts
-    expect(card.scrollHeight).toBeLessThanOrEqual(card.clientHeight + 6);
-    expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth + 2);
+    expect(card.scrollHeight).toBeLessThanOrEqual(card.clientHeight + 1);
+    expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth + 1);
   }
 }
 
@@ -240,9 +246,18 @@ async function expectNoRowOverflow(page: Page) {
   );
 
   for (const row of overflow) {
-    // Large tolerance for row internal content; the card-level overflow check is the primary guard.
-    expect(row.scrollHeight).toBeLessThanOrEqual(row.clientHeight + 24);
-    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 4);
+    expect(row.scrollHeight).toBeLessThanOrEqual(row.clientHeight + 1);
+    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+  }
+}
+
+async function expectMinimumDepartureRowsPerCard(page: Page, minimumRows: number) {
+  const rowCounts = await page.getByTestId("stop-card").evaluateAll((cards) =>
+    cards.map((card) => card.querySelectorAll('[data-testid="departure-row"]').length),
+  );
+
+  for (const rowCount of rowCounts) {
+    expect(rowCount).toBeGreaterThanOrEqual(minimumRows);
   }
 }
 
